@@ -1,0 +1,20 @@
+{
+  "name": "deskghost",
+  "version": "0.2.0",
+  "description": "A transparent desktop companion with a spatial task graph",
+  "private": true,
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "prestart": "node scripts/build-desktop.cjs",
+    "start": "electron .",
+    "build": "node scripts/build-desktop.cjs --package",
+    "test": "node --test tests/desktop.test.cjs",
+    "test:ui": "node tests/desktop.test.cjs --ui"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "44.3.0",
+    "playwright": "1.63.0"
+  }
+}

@@ -1,0 +1,13 @@
+**/bin/
+**/obj/
+.tools/
+.local/
+artifacts/
+node_modules/
+test-results/
+playwright-report/
+.vs/
+*.user
+*.suo
+*.deskghost.json
+*.deskghost.json.*

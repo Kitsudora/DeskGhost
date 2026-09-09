@@ -1,0 +1,35 @@
+name: Windows desktop build and checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Install desktop dependencies
+        run: npm ci
+      - name: Build current desktop data service
+        run: dotnet build src/DeskGhost.Bridge/DeskGhost.Bridge.csproj --configuration Release
+      - name: Check graph rules and safe persistence
+        run: dotnet run --project tests/DeskGhost.Checks/DeskGhost.Checks.csproj --configuration Release
+      - name: Check desktop gesture logic
+        run: npm test
+      - name: Check real Electron interaction and saving
+        run: npm run test:ui
