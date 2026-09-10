@@ -195,6 +195,7 @@ internal sealed class WorkspaceHost
             case "renameWorkspace": session.RenameWorkspace(Text(p, "name")); break;
             case "addCategory": session.AddCategory(Text(p, "category")); break;
             case "addLink": session.AddLink(Id(p, "sourceId"), Id(p, "targetId")); break;
+            case "connectTask": session.ConnectTask(Id(p, "sourceId"), Id(p, "targetId")); break;
             case "removeLink": session.RemoveLink(Id(p, "sourceId"), Id(p, "targetId")); break;
             case "rewireLink": session.RewireLink(Id(p, "sourceId"), Id(p, "targetId"), Id(p, "newSourceId"), Id(p, "newTargetId")); break;
             case "deleteTask": session.DeleteTask(Id(p, "taskId")); break;

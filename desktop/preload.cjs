@@ -5,7 +5,7 @@ const allowed = new Set([
   'bootstrap', 'createWorkspace', 'openWorkspace', 'recoverWorkspace', 'closeWorkspace', 'activateWorkspace',
   'saveWorkspace', 'saveAs', 'exportWorkspace', 'chooseDataFolder', 'updateSettings',
   'createTask', 'updateTask', 'setState', 'moveTask', 'insertColumn', 'renameColumn', 'renameWorkspace',
-  'addCategory', 'addLink', 'removeLink', 'rewireLink', 'deleteTask', 'restoreTask', 'archiveTask',
+  'addCategory', 'addLink', 'connectTask', 'removeLink', 'rewireLink', 'deleteTask', 'restoreTask', 'archiveTask',
   'unarchiveTask', 'undo', 'redo', 'hide', 'summon', 'setRegions', 'quit'
 ]);
 

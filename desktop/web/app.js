@@ -12,8 +12,7 @@ let draft = null;
 let editTimer = 0;
 let editSaving = Promise.resolve();
 let toastTimer = 0;
-let composing = false;
-let readyGeneration = 0;
+let wand = null;
 let effects = null;
 let interactionHeld = false;
 let regionFrame = 0;
@@ -37,7 +36,6 @@ const graph = new TaskGraph($('graph-board'), {
 
 function activeDocument() { return state.documents.find(doc => doc.id === state.activeWorkspaceId) ?? state.documents[0]; }
 function activeWorkspace() { return activeDocument()?.workspace; }
-function viewportPoint() { return { x: innerWidth - 145, y: mode === 'idle' ? innerHeight - 93 : innerHeight - 173 }; }
 function composerBounds() {
   const panel = $('composer');
   // Use its final layout, independent of the entrance animation's scale/offset.
@@ -96,7 +94,9 @@ function applyState(next) {
   $('search-category').value = [...$('search-category').options].some(item => item.value === category) ? category : '*';
   renderWorkspaceList(); renderGraph(); renderSelection(); updateSaveIndicator();
   const level = next.settings?.effects ?? 'high';
-  if (level !== effects) { effects = level; document.documentElement.dataset.effects = level; flock.setEffects(level); }
+  if (level !== effects) {
+    effects = level; document.documentElement.dataset.effects = level; flock.setEffects(level);
+  }
   if (initialFocus && workspace) { initialFocus = false; requestAnimationFrame(() => graph.fit()); }
   if (previous !== state.activeWorkspaceId) requestAnimationFrame(() => graph.fit());
   queueRegions();
@@ -144,19 +144,13 @@ function renderSelection() {
   $('restore-selected').hidden = !selected.length || selected.some(task => !task.deletedAt && !task.isArchived);
 }
 
-function setMode(next, point) {
+function setMode(next, { retreat = false } = {}) {
+  if (next !== 'ready') { wand = null; $('wand-anchor').hidden = true; }
   mode = next; document.body.dataset.mode = next;
   if (next === 'graph' || next === 'idle') {
-    show('ready-prompt', false); readyGeneration++; flock.setMode('idle', { point: viewportPoint() });
+    flock.setMode(retreat ? 'disperse' : 'hidden');
   }
   renderSelection(); queueRegions();
-}
-
-async function showManager() {
-  if (draft?.kind === 'create') { $('task-title').focus(); return; }
-  setMode('graph');
-  await host?.invoke('summon', { mode: 'graph' });
-  requestAnimationFrame(() => $('graph-board').focus({ preventScroll: true }));
 }
 
 async function hideManager() {
@@ -178,23 +172,24 @@ function updateComposerCategories() {
 async function openCreator(options = {}) {
   if (draft?.kind === 'create') { $('task-title').focus(); return; }
   if (draft?.kind === 'edit') { try { await flushEdit(); } catch { return; } }
-  if (draft?.kind === 'create') { $('task-title').focus(); return; }
-  if (!activeWorkspace()) { show('name-prompt'); $('workspace-input').focus(); return; }
-  draft = { kind: 'create', workspaceId: state.activeWorkspaceId, sourceIds: options.sourceIds ?? [], column: options.column, row: options.row, dirty: false };
-  closePopovers(); show('ready-prompt', false); readyGeneration++;
+  if (!activeWorkspace()) {
+    setMode('graph'); show('name-prompt'); $('workspace-input').focus();
+    host?.invoke('summon', { mode: 'graph', internal: true }).catch(error => toast(error.message, true));
+    return;
+  }
+  draft = { kind: 'create', point: options.point, workspaceId: state.activeWorkspaceId, sourceIds: options.sourceIds ?? [], column: options.column, row: options.row, dirty: false };
+  closePopovers();
   $('composer').classList.remove('editing');
-  $('composer-eyebrow').textContent = '捕捉下一步'; $('composer-hint').innerHTML = '<kbd>Ctrl</kbd> + <kbd>Enter</kbd> 下一栏';
+  $('composer-eyebrow').textContent = '未开始'; $('composer-hint').innerHTML = '<kbd>Ctrl</kbd> + <kbd>Enter</kbd> 下一栏';
   $('submit-task').textContent = '创建任务 ↗'; $('task-title').value = options.seed ?? ''; $('task-category').value = ''; $('task-description').value = ''; $('composer-error').textContent = '';
   $('task-workspace').disabled = false;
   $('task-workspace').replaceChildren(...state.documents.map(doc => option(doc.id, doc.workspace.name)));
   $('task-workspace').value = draft.workspaceId; updateComposerCategories();
-  show('edit-status-field', false); show('composer'); setMode('create');
-  $('task-title').focus(); $('task-title').setSelectionRange($('task-title').value.length, $('task-title').value.length);
+  show('edit-status-field', false); show('composer'); setMode('create'); positionComposer();
+  $('task-title').focus({ preventScroll: true }); $('task-title').setSelectionRange($('task-title').value.length, $('task-title').value.length);
+  flock.setMode('card', { bounds: composerBounds() });
   host?.invoke('summon', { mode: 'create', internal: true }).catch(error => toast(error.message, true));
-  requestAnimationFrame(() => {
-    flock.setMode('card', { bounds: composerBounds() });
-    queueRegions();
-  });
+  queueRegions();
 }
 
 async function openEditor(id) {
@@ -204,7 +199,8 @@ async function openEditor(id) {
   const task = activeWorkspace()?.tasks.find(task => task.id === id);
   if (!task || task.deletedAt) return;
   draft = { kind: 'edit', workspaceId: state.activeWorkspaceId, taskId: id, dirty: false };
-  $('composer').classList.add('editing'); $('composer-eyebrow').textContent = task.isArchived ? '归档中的记忆' : '任务卡片';
+  $('composer').style.left = ''; $('composer').style.top = '';
+  $('composer').classList.add('editing'); $('composer-eyebrow').textContent = task.isArchived ? '已归档' : stateNames[task.state];
   $('composer-hint').textContent = '修改会自动保存'; $('submit-task').textContent = '完成编辑';
   $('task-title').value = task.title; $('task-category').value = task.category; $('task-description').value = task.description; $('task-state').value = task.state; $('composer-error').textContent = '';
   $('task-workspace').replaceChildren(option(draft.workspaceId, activeWorkspace().name)); $('task-workspace').value = draft.workspaceId; $('task-workspace').disabled = true;
@@ -233,17 +229,13 @@ async function flushEdit() {
   } while (draft === editing && editing.dirty);
 }
 
-function closeComposer(disperse = true) {
+function closeComposer(disperse = true, notifyHost = true) {
   if (draft?.busy) throw new Error('任务正在保存，请稍候');
   const creating = draft?.kind === 'create';
   clearTimeout(editTimer); draft = null; show('composer', false); $('composer-error').textContent = '';
-  if (mode === 'create') setMode('idle');
-  if (creating && disperse) host?.invoke('hide', { disperse: true }).catch(error => toast(error.message, true));
-  if (disperse) {
-    flock.setMode('disperse');
-    const closingMode = mode;
-    setTimeout(() => { if (!draft && mode === closingMode) flock.setMode('idle', { point: viewportPoint() }); }, 950);
-  }
+  if (mode === 'create' || mode === 'ready') setMode('idle', { retreat: disperse });
+  if (creating && disperse && notifyHost) host?.invoke('hide', { disperse: true }).catch(error => toast(error.message, true));
+  if (disperse) flock.setMode('disperse');
   updateSaveIndicator();
 }
 
@@ -280,23 +272,44 @@ function focusTask(id) {
   categoryView = false; syncViewButtons(); renderGraph(); graph.selectTask(id);
 }
 
-function showReady(point = { x: innerWidth / 2, y: innerHeight / 2 }) {
-  if (draft) { $('task-title').focus(); return; }
-  closePopovers(); readyGeneration++;
-  setMode('ready'); $('ready-input').value = ''; composing = false;
-  show('ready-prompt'); moveReadyPrompt(point); flock.setMode('ring', { point });
-  $('ready-input').focus();
+function positionComposer() {
+  const panel = $('composer'), point = draft?.point;
+  panel.style.left = point ? Math.max(panel.offsetWidth / 2 + 16, Math.min(innerWidth - panel.offsetWidth / 2 - 16, point.x)) + 'px' : '';
+  panel.style.top = point ? Math.max(panel.offsetHeight / 2 + 16, Math.min(innerHeight - panel.offsetHeight / 2 - 16, point.y)) + 'px' : '';
 }
-function moveReadyPrompt(point) {
-  $('ready-prompt').style.left = `${Math.max(160, Math.min(innerWidth - 160, point.x))}px`;
-  $('ready-prompt').style.top = `${Math.max(20, Math.min(innerHeight - 155, point.y + 104))}px`;
+
+async function showWand(event) {
+  closePopovers(); setMode('ready');
+  const anchor = $('wand-anchor');
+  const current = wand = { activationId: event.activationId, point: event.point, revision: 0, pending: false, held: false };
+  anchor.classList.add('is-pending'); anchor.hidden = false;
+  flock.setMode('ring', { point: event.point });
+  await updateWandRegion(current);
 }
-function commitReady() {
-  const generation = readyGeneration;
-  queueMicrotask(() => {
-    if (composing || mode !== 'ready' || generation !== readyGeneration || !$('ready-input').value) return;
-    const seed = $('ready-input').value; openCreator({ seed });
-  });
+
+function wandRegion() { return { x: 0, y: 0, width: innerWidth, height: innerHeight }; }
+
+async function updateWandRegion(current) {
+  if (wand !== current || current.pending) return;
+  const revision = current.revision;
+  current.pending = true;
+  try {
+    // Only the summoned preparation state accepts a desktop click. Register
+    // its native hit region before enabling the transparent click surface.
+    const accepted = await host.invoke('setRegions', { readyActivation: current.activationId, regions: [wandRegion()], dragging: current.held });
+    if (wand === current && accepted) $('wand-anchor').classList.remove('is-pending');
+  } catch (error) {
+    if (wand === current) { setMode('idle', { retreat: true }); await host.invoke('hide', { disperse: true }).catch(() => {}); toast(error.message, true); }
+  } finally {
+    current.pending = false;
+    if (wand === current && current.revision !== revision) updateWandRegion(current);
+  }
+}
+
+function followWand(point) {
+  if (!wand) return;
+  wand.point = point;
+  if (!wand.held) flock.setTarget(point);
 }
 
 function syncViewButtons() { $('graph-mode').classList.toggle('active', !categoryView); $('category-mode').classList.toggle('active', categoryView); }
@@ -326,10 +339,6 @@ bind('archive-selected', async () => { await flushEdit(); for (const taskId of [
 bind('restore-selected', async () => { for (const taskId of [...selection]) { const task = activeWorkspace()?.tasks.find(task => task.id === taskId); await run(task?.deletedAt ? 'restoreTask' : 'unarchiveTask', { taskId }); } });
 bind('delete-selected', async () => { await flushEdit(); closeComposer(false); for (const taskId of [...selection]) await run('deleteTask', { taskId }); });
 bind('hide-manager', hideManager);
-bind('pet-recall', () => host?.invoke('summon', { mode: 'ready' }));
-let petClickTimer = 0;
-$('pet-launcher').addEventListener('click', () => { clearTimeout(petClickTimer); petClickTimer = setTimeout(() => showManager().catch(error => toast(error.message, true)), 210); });
-$('pet-launcher').addEventListener('dblclick', () => { clearTimeout(petClickTimer); openCreator(); });
 $('task-form').addEventListener('submit', submitTask);
 bind('close-composer', async () => { if (draft?.kind === 'edit') await flushEdit(); closeComposer(); });
 $('task-workspace').addEventListener('change', updateComposerCategories);
@@ -348,20 +357,41 @@ $('task-form').addEventListener('focusin', event => {
   if (draft?.kind === 'edit') return;
   $('composer-hint').innerHTML = event.target === $('task-description') ? '<kbd>Ctrl</kbd> + <kbd>Enter</kbd> 创建任务' : '<kbd>Ctrl</kbd> + <kbd>Enter</kbd> 下一栏';
 });
-$('ready-input').addEventListener('compositionstart', () => { composing = true; });
-$('ready-input').addEventListener('compositionend', () => { composing = false; commitReady(); });
-$('ready-input').addEventListener('input', event => { if (!event.isComposing) commitReady(); });
+$('wand-anchor').addEventListener('pointerdown', event => {
+  if (!wand || event.button !== 0) return;
+  wand.held = true; wand.revision++;
+  $('wand-anchor').setPointerCapture(event.pointerId);
+  updateWandRegion(wand);
+});
+$('wand-anchor').addEventListener('lostpointercapture', () => {
+  if (!wand) return;
+  const current = wand;
+  current.held = false; current.revision++;
+  requestAnimationFrame(() => {
+    if (wand !== current) return; // A completed click has already opened its card.
+    updateWandRegion(current); followWand(current.point);
+  });
+});
+$('wand-anchor').addEventListener('click', event => {
+  if (!wand || event.button !== 0 || $('wand-anchor').classList.contains('is-pending')) return;
+  // A real click anywhere in this viewport activates the native window. Open
+  // and focus the existing title synchronously, using this click's position.
+  openCreator({ point: { x: event.clientX, y: event.clientY } }).catch(error => toast(error.message, true));
+});
+$('setting-dismiss-speed').addEventListener('input', () => { $('dismiss-speed-value').value = Number($('setting-dismiss-speed').value).toFixed(1); });
 
 bind('open-settings', () => {
   closePopovers(); settingsFolder = null;
   $('setting-effects').value = state.settings.effects ?? 'high'; $('setting-gesture').checked = state.settings.gestureEnabled !== false;
+  $('setting-roam').value = String(state.settings.idleRoamSeconds ?? 180);
+  $('setting-dismiss-speed').value = String(state.settings.dismissSpeed ?? 1.5); $('dismiss-speed-value').value = Number($('setting-dismiss-speed').value).toFixed(1);
   $('setting-create-key').value = state.settings.createHotkey ?? 'Control+Alt+N'; $('setting-graph-key').value = state.settings.graphHotkey ?? 'Control+Alt+G';
   $('data-folder').textContent = state.settings.dataFolder ?? ''; $('settings-error').textContent = ''; show('settings-panel');
 });
 bind('choose-folder', async () => { const response = await run('chooseDataFolder'); settingsFolder = response?.result?.dataFolder ?? state.settings.dataFolder; $('data-folder').textContent = settingsFolder ?? ''; });
 bind('apply-settings', async () => {
   try {
-    await run('updateSettings', { effects: $('setting-effects').value, gestureEnabled: $('setting-gesture').checked, createHotkey: $('setting-create-key').value, graphHotkey: $('setting-graph-key').value, ...(settingsFolder ? { dataFolder: settingsFolder } : {}) }, { quiet: true });
+    await run('updateSettings', { effects: $('setting-effects').value, gestureEnabled: $('setting-gesture').checked, idleRoamSeconds: Number($('setting-roam').value), dismissSpeed: Number($('setting-dismiss-speed').value), createHotkey: $('setting-create-key').value, graphHotkey: $('setting-graph-key').value, ...(settingsFolder ? { dataFolder: settingsFolder } : {}) }, { quiet: true });
     show('settings-panel', false); toast('已按你的方式调整');
   } catch (error) { $('settings-error').textContent = error.message; }
 });
@@ -390,10 +420,11 @@ document.addEventListener('keydown', async event => {
     event.preventDefault();
     if (draft) { try { if (draft.kind === 'edit') await flushEdit(); closeComposer(); } catch { /* Retain invalid draft. */ } }
     else if (['settings-panel', 'search-panel', 'workspace-menu', 'name-prompt'].some(id => !$(id).hidden)) closePopovers();
-    else if (mode === 'ready') { readyGeneration++; await host?.invoke('hide', { disperse: true }); }
+    else if (mode === 'ready') await host?.invoke('hide', { disperse: true });
     else await hideManager();
     return;
   }
+  if (mode === 'ready') return;
   if (draft && event.ctrlKey && event.key === 'Enter') {
     event.preventDefault();
     if (event.target === $('task-title')) $('task-category').focus();
@@ -410,6 +441,7 @@ function queueRegions() {
   if (regionFrame) return;
   regionFrame = requestAnimationFrame(() => {
     regionFrame = 0;
+    if (mode === 'ready') return; // The preparation click surface uses the acknowledged path above.
     const regions = [...document.querySelectorAll('[data-interactive]')].filter(element => {
       const style = getComputedStyle(element); return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length;
     }).map(element => { const rect = element.getBoundingClientRect(); return { x: Math.max(0, rect.x), y: Math.max(0, rect.y), width: Math.min(innerWidth - Math.max(0, rect.x), rect.width), height: Math.min(innerHeight - Math.max(0, rect.y), rect.height) }; }).filter(rect => rect.width > 0 && rect.height > 0);
@@ -421,13 +453,20 @@ document.addEventListener('pointerdown', event => {
 });
 document.addEventListener('pointerup', () => { interactionHeld = false; queueRegions(); });
 document.addEventListener('pointercancel', () => { interactionHeld = false; queueRegions(); });
-window.addEventListener('blur', () => { interactionHeld = false; queueRegions(); if (mode === 'ready' && !composing) host?.invoke('hide', { disperse: true }).catch(() => {}); });
+// Native window activation owns dismissal. A Chromium focus transition can
+// precede activation; a second asynchronous hide here would cancel a new summon.
+window.addEventListener('blur', () => { interactionHeld = false; queueRegions(); });
 document.addEventListener('pointermove', event => {
-  if (!interactionHeld) host?.setInteractive(!!event.target.closest('[data-interactive]'));
+  if (mode !== 'ready' && !interactionHeld) host?.setInteractive(!!event.target.closest('[data-interactive]'));
 }, { passive: true });
-window.addEventListener('resize', () => { flock.resize(); if (draft?.kind === 'create') flock.setMode('card', { bounds: composerBounds() }); else if (['graph', 'idle'].includes(mode)) flock.setTarget(viewportPoint()); queueRegions(); });
+window.addEventListener('resize', () => {
+  flock.resize();
+  if (draft?.kind === 'create') { positionComposer(); flock.setMode('card', { bounds: composerBounds() }); }
+  if (wand) { wand.revision++; updateWandRegion(wand); }
+  queueRegions();
+});
 new ResizeObserver(queueRegions).observe(document.body);
-new ResizeObserver(() => { if (draft?.kind === 'create') flock.setMode('card', { bounds: composerBounds() }); queueRegions(); }).observe($('composer'));
+new ResizeObserver(() => { if (draft?.kind === 'create') { positionComposer(); flock.setMode('card', { bounds: composerBounds() }); } queueRegions(); }).observe($('composer'));
 
 host?.onEvent(async event => {
   if (event.type === 'state') applyState(event);
@@ -437,8 +476,7 @@ host?.onEvent(async event => {
   else if (event.type === 'hide') {
     if (draft?.kind === 'create') return;
     try {
-      await flushEdit(); closeComposer(false); closePopovers(); setMode('idle');
-      if (event.disperse) { flock.setMode('disperse'); setTimeout(() => { if (mode === 'idle') flock.setMode('idle', { point: viewportPoint() }); }, 1050); }
+      await flushEdit(); closeComposer(event.disperse === true, false); closePopovers(); setMode('idle', { retreat: event.disperse === true });
     } catch { /* Retain editor. */ }
   } else if (event.type === 'summon') {
     if (draft?.kind === 'create') {
@@ -446,11 +484,12 @@ host?.onEvent(async event => {
       if (event.mode !== 'create') await host.invoke('summon', { mode: 'create', internal: true });
     } else if (event.mode === 'create') await openCreator();
     else if (event.mode === 'ready') {
-      if (draft) await host.invoke('summon', { mode: 'graph', internal: true });
-      showReady(event.point);
+      if (draft) { await host.invoke('summon', { mode: 'graph', internal: true }); $('task-title').focus(); }
+      else await showWand(event);
     } else { setMode('graph'); $('graph-board').focus({ preventScroll: true }); }
-  } else if (event.type === 'cursorPoint' && mode === 'ready') { flock.setTarget(event.point); moveReadyPrompt(event.point); queueRegions(); }
-  else if (event.type === 'disperse' && mode === 'ready') { show('ready-prompt', false); setMode('idle'); flock.setMode('disperse'); }
+  } else if (event.type === 'cursorPoint' && mode === 'ready') followWand(event.point);
+  else if (event.type === 'roaming' && mode === 'idle') flock.setMode(event.active ? 'roaming' : 'disperse');
+  else if (event.type === 'disperse' && mode === 'ready') closeComposer(true, false);
 });
 
 async function bootstrap() {

@@ -12,9 +12,9 @@
   <canvas id="flock" aria-hidden="true"></canvas>
   <main id="manager" aria-label="任务工作区">
     <header class="workspace-bar glass" data-interactive>
-      <button class="brand icon-button" id="pet-recall" aria-label="召集桌宠" title="召集桌宠">
+      <span class="brand brand-mark" id="pet-recall" aria-hidden="true">
         <svg viewBox="0 0 32 32" fill="currentColor"><path d="M14 3Q15 1 17 4L25 16Q27 19 23 18L8 15Q5 14 8 11Z"/><path d="M5 18Q4 16 7 17L16 22Q18 23 15 24L6 27Q4 28 4 25Z"/><path d="M23 22Q24 20 25 23L28 28Q29 30 26 29L20 27Q18 26 20 25Z"/></svg>
-      </button>
+      </span>
       <div class="brand-name">DeskGhost<span>桌间微光</span></div>
       <span class="bar-divider"></span>
       <button id="workspace-toggle" class="workspace-toggle" aria-expanded="false"><span id="workspace-name">正在打开工作区</span><svg viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></button>
@@ -62,30 +62,32 @@
     <div id="selection-tools" class="selection-tools glass" data-interactive hidden><span id="selection-count"></span><button id="edit-selected">编辑</button><button id="continue-selected">延续 / 汇合 →</button><button id="archive-selected">归档</button><button id="restore-selected">恢复</button><button id="delete-selected" class="subtle-danger">删除</button></div>
   </main>
 
-  <section id="composer" class="composer glass" data-interactive hidden aria-label="任务卡片编辑器">
+  <button id="wand-anchor" class="wand-anchor" type="button" data-interactive hidden aria-label="单击创建任务"></button>
+
+  <section id="composer" class="composer dg-card-surface" data-interactive hidden aria-label="任务卡片编辑器" aria-describedby="composer-eyebrow">
     <form id="task-form" novalidate>
-      <header class="composer-top"><span class="eyebrow" id="composer-eyebrow">捕捉下一步</span><button id="close-composer" class="icon-button" type="button" aria-label="取消编辑">×</button></header>
+      <header class="composer-top dg-card-top">
+        <span class="visually-hidden" id="composer-eyebrow">捕捉下一步</span>
+        <span class="composer-initial-state dg-task-state"><i class="dg-state-dot" aria-hidden="true"></i>未开始</span>
+        <label id="edit-status-field" class="composer-state dg-task-state" hidden><span class="visually-hidden">任务状态</span><i class="dg-state-dot" aria-hidden="true"></i><select id="task-state" aria-label="任务状态"><option value="NotStarted">未开始</option><option value="InProgress">进行中</option><option value="Completed">已完成</option><option value="Stopped">已停止</option></select></label>
+        <button id="close-composer" class="dg-card-action" type="button" aria-label="取消编辑">×</button>
+      </header>
       <label class="composer-workspace"><span>工作区</span><select id="task-workspace" aria-label="所属工作区"></select></label>
       <div id="source-summary" class="source-summary" hidden></div>
-      <label class="field title-field"><span class="field-label"><i>01</i> 标题</span><input id="task-title" placeholder="此刻，你想做什么？" maxlength="256" autocomplete="off" required></label>
-      <label class="field"><span class="field-label"><i>02</i> 分类</span><input id="task-category" list="category-suggestions" placeholder="检索分类，或输入新分类" maxlength="80" autocomplete="off"><datalist id="category-suggestions"></datalist></label>
-      <label class="field"><span class="field-label"><i>03</i> 内容</span><textarea id="task-description" placeholder="留下想法、细节，或一个小小的开始…" maxlength="16000" rows="4"></textarea></label>
-      <label id="edit-status-field" class="field" hidden><span class="field-label">任务状态</span><select id="task-state"><option value="NotStarted">未开始</option><option value="InProgress">进行中</option><option value="Completed">已完成</option><option value="Stopped">已停止</option></select></label>
+      <label class="composer-title"><span class="visually-hidden">标题</span><input id="task-title" class="dg-card-title-input" placeholder="给这一步起个名字" maxlength="256" autocomplete="off" required></label>
+      <label class="composer-description"><span class="visually-hidden">内容</span><textarea id="task-description" class="dg-card-description-input" placeholder="记录想法、细节，或下一步…" maxlength="16000" rows="4"></textarea></label>
+      <label class="composer-category dg-category-pill"><span class="visually-hidden">分类</span><input id="task-category" list="category-suggestions" placeholder="分类 / 新建分类" maxlength="80" autocomplete="off"><datalist id="category-suggestions"></datalist></label>
       <p id="composer-error" class="inline-error" role="alert"></p>
       <footer class="composer-footer"><span id="composer-hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> 下一栏</span><button type="submit" id="submit-task" class="primary-button">创建任务 <span>↗</span></button></footer>
     </form>
   </section>
 
-  <section id="ready-prompt" class="ready-prompt glass" data-interactive hidden>
-    <label for="ready-input">一个念头，就从这里开始</label>
-    <input id="ready-input" placeholder="直接输入任务标题…" maxlength="256" autocomplete="off">
-    <span>Esc 或左右甩动，轻轻散开</span>
-  </section>
-
   <section id="settings-panel" class="settings-panel glass" data-interactive hidden aria-label="偏好设置">
     <div class="panel-heading"><div><span class="eyebrow">DESKGHOST / PREFERENCES</span><h2>让它按你的方式存在</h2></div><button data-close="settings-panel" class="icon-button" aria-label="关闭设置">×</button></div>
     <label class="setting"><span><strong>碎片效果</strong><small>白色圆角三角 · 群鸟运动</small></span><select id="setting-effects"><option value="high">流畅 · 60 fps</option><option value="low">轻量 · 30 fps</option><option value="off">关闭动画</option></select></label>
-    <label class="setting"><span><strong>双圈呼出</strong><small>在桌面任意位置，连续画两圈</small></span><input id="setting-gesture" type="checkbox" role="switch"></label>
+    <label class="setting"><span><strong>魔杖启用</strong><small>仅待机时识别，连续画两圈 · 直径约屏幕高度的 1/4</small></span><input id="setting-gesture" type="checkbox" role="switch"></label>
+    <div class="setting setting-dismiss-speed"><label for="setting-dismiss-speed"><strong>驱散速度</strong><small id="dismiss-speed-unit">屏高/秒 · 调低更容易驱散</small></label><output id="dismiss-speed-value" for="setting-dismiss-speed">1.5</output><input id="setting-dismiss-speed" type="range" min="0.5" max="4" step="0.1" value="1.5" aria-describedby="dismiss-speed-unit"></div>
+    <label class="setting"><span><strong>闲置时漫游</strong><small>平时停在屏幕外，恢复操作后退场</small></span><select id="setting-roam"><option value="180">3 分钟后</option><option value="300">5 分钟后</option><option value="600">10 分钟后</option><option value="0">关闭漫游</option></select></label>
     <label class="setting"><span><strong>创建任务快捷键</strong></span><input id="setting-create-key" maxlength="80" aria-label="创建任务快捷键"></label>
     <label class="setting"><span><strong>任务图快捷键</strong></span><input id="setting-graph-key" maxlength="80" aria-label="任务图快捷键"></label>
     <div class="setting storage-setting"><span><strong>新工作区存储位置</strong><small id="data-folder"></small></span><button id="choose-folder" class="secondary-button">更改</button></div>
@@ -95,7 +97,6 @@
   </section>
 
   <section id="name-prompt" class="name-prompt glass" data-interactive hidden aria-label="新建工作区"><form id="workspace-form"><div class="panel-heading"><h2>一片新的工作空间</h2><button class="icon-button" type="button" data-close="name-prompt" aria-label="取消新建工作区">×</button></div><input id="workspace-input" placeholder="工作区名称" maxlength="120" required autocomplete="off"><button class="primary-button" type="submit">创建工作区 →</button></form></section>
-  <button id="pet-launcher" class="pet-launcher" data-interactive title="打开任务图 · 双击创建任务" aria-label="打开任务图"><span>DeskGhost</span></button>
   <div id="toast" class="toast glass" role="status" data-interactive hidden></div>
   <div id="boot-screen" class="boot-screen glass" data-interactive><div class="boot-spark"></div><h1>DeskGhost</h1><p id="boot-message">正在打开你的工作空间…</p><button id="retry-boot" class="secondary-button" hidden>重试连接</button></div>
   <script type="module" src="app.js"></script>

@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL, fileURLToPath } = require('node:url');
-const { CircleGestureRecognizer, ShakeGestureRecognizer } = require('./gesture.cjs');
+const { CircleGestureRecognizer, SpeedDismissRecognizer } = require('./gesture.cjs');
 
 const projectRoot = path.resolve(__dirname, '..');
 const dataIndex = process.argv.indexOf('--data-dir');
@@ -18,16 +18,19 @@ const settingsPath = path.join(baseFolder, 'web-settings.json');
 const webRoot = path.join(__dirname, 'web');
 const rendererPath = path.join(webRoot, 'index.html');
 const rendererUrl = pathToFileURL(rendererPath).href;
-const defaults = { formatVersion: 1, dataFolder: path.join(baseFolder, 'Workspaces'), createHotkey: 'Ctrl+Alt+N', graphHotkey: 'Ctrl+Alt+G', gestureEnabled: true, effects: 'high', openFiles: [] };
+const defaults = { formatVersion: 1, dataFolder: path.join(baseFolder, 'Workspaces'), createHotkey: 'Ctrl+Alt+N', graphHotkey: 'Ctrl+Alt+G', gestureEnabled: true, effects: 'high', idleRoamSeconds: 180, dismissSpeed: 1.5, openFiles: [] };
 let settings = { ...defaults }, settingsInvalid = false, settingsWarning = null;
 let win, tray, bridge, startup, lastState = { documents: [], activeWorkspaceId: null, result: null };
 let quitting = false, exitRequested = false, mode = 'graph', interactive = false, regions = [], dragUntil = 0;
 let sampleTimer, rendererReady = false, suspended = false, lastCursor = null, warningList = [];
 let cursorFailures = 0;
+let activationId = 0, activationPending = false, activationTimer;
+let readyEscapeRegistered = false;
+let roaming = false, nextRoamCheck = 0;
 let pendingOperations = 0, operationQueue = Promise.resolve();
 const rescuedSnapshots = new Map();
-const circles = new CircleGestureRecognizer(), shake = new ShakeGestureRecognizer();
-const mutationMethods = new Set(['createTask', 'updateTask', 'setState', 'moveTask', 'insertColumn', 'renameColumn', 'renameWorkspace', 'addCategory', 'addLink', 'removeLink', 'rewireLink', 'deleteTask', 'restoreTask', 'archiveTask', 'unarchiveTask', 'undo', 'redo', 'saveWorkspace', 'closeWorkspace', 'activateWorkspace']);
+const circles = new CircleGestureRecognizer(), speedDismiss = new SpeedDismissRecognizer();
+const mutationMethods = new Set(['createTask', 'updateTask', 'setState', 'moveTask', 'insertColumn', 'renameColumn', 'renameWorkspace', 'addCategory', 'addLink', 'connectTask', 'removeLink', 'rewireLink', 'deleteTask', 'restoreTask', 'archiveTask', 'unarchiveTask', 'undo', 'redo', 'saveWorkspace', 'closeWorkspace', 'activateWorkspace']);
 
 class CoreBridge {
   constructor() {
@@ -94,8 +97,11 @@ function acceptState(state, emit = true) {
   return value;
 }
 function checkSettings(value) {
+  if (value && !Object.hasOwn(value, 'idleRoamSeconds')) value = { ...value, idleRoamSeconds: defaults.idleRoamSeconds };
+  if (value && !Object.hasOwn(value, 'dismissSpeed')) value = { ...value, dismissSpeed: defaults.dismissSpeed };
   if (!value || value.formatVersion !== 1 || typeof value.dataFolder !== 'string' || !value.dataFolder.trim() || value.dataFolder.length > 1024 || !path.isAbsolute(value.dataFolder) ||
-    !['high', 'low', 'off'].includes(value.effects) || typeof value.gestureEnabled !== 'boolean' ||
+    !['high', 'low', 'off'].includes(value.effects) || typeof value.gestureEnabled !== 'boolean' || ![0, 180, 300, 600].includes(value.idleRoamSeconds) ||
+    !Number.isFinite(value.dismissSpeed) || value.dismissSpeed < 0.5 || value.dismissSpeed > 4 ||
     !Array.isArray(value.openFiles) || value.openFiles.length > 12 || value.openFiles.some(p => typeof p !== 'string' || !path.isAbsolute(p) || p.length > 1024)) throw new Error('设置文件包含无效数据。');
   for (const key of ['createHotkey', 'graphHotkey']) if (typeof value[key] !== 'string' || !value[key].trim() || value[key].length > 80) throw new Error('全局快捷键无效。');
   return value;
@@ -128,13 +134,13 @@ async function loadSettings() {
     warningList.push('无法读取设置，使用临时默认值；原文件保持不变。' + error.message);
   }
 }
-async function saveSettings(explicit = false) {
+async function saveSettings(explicit = false, value = settings) {
   if (settingsInvalid && !explicit) return;
   await fsp.mkdir(baseFolder, { recursive: true });
   const temporary = settingsPath + '.' + process.pid + '.tmp';
   try {
     const file = await fsp.open(temporary, 'w');
-    try { await file.writeFile(JSON.stringify(settings, null, 2), 'utf8'); await file.sync(); } finally { await file.close(); }
+    try { await file.writeFile(JSON.stringify(value, null, 2), 'utf8'); await file.sync(); } finally { await file.close(); }
     if (fs.existsSync(settingsPath)) {
       const preserved = settingsInvalid ? settingsPath + '.' + Date.now() + '.corrupt' : settingsPath + '.bak';
       await fsp.copyFile(settingsPath, preserved);
@@ -167,15 +173,26 @@ async function rescueSnapshot(document, destination, adopt) {
   } finally { helper?.close(); await fsp.unlink(temporary).catch(() => {}); }
 }
 const registered = new Map();
+function isEscapeHotkey(key) { return /^(esc|escape)$/i.test(key.trim()); }
+function setReadyEscape(active) {
+  if (readyEscapeRegistered && !active) { globalShortcut.unregister('Escape'); readyEscapeRegistered = false; }
+  if (!active || readyEscapeRegistered || [...registered.keys()].some(isEscapeHotkey)) return;
+  try { readyEscapeRegistered = globalShortcut.register('Escape', () => { if (mode === 'ready') hideOverlay(true); }); }
+  catch { readyEscapeRegistered = false; }
+}
 function configureHotkeys(candidate, initial = false) {
   const keys = [candidate.createHotkey, candidate.graphHotkey];
   const canonical = key => key.replace(/\s/g, '').toLowerCase().replace(/control/g, 'ctrl');
   if (canonical(keys[0]) === canonical(keys[1])) throw new Error('创建任务和任务图必须使用不同快捷键。');
+  if (readyEscapeRegistered && keys.some(isEscapeHotkey)) setReadyEscape(false);
   const added = [];
   try {
     for (const key of keys) {
       if (registered.has(key)) continue;
-      const success = globalShortcut.register(key, () => summon(key === settings.createHotkey ? 'create' : 'graph'));
+      const success = globalShortcut.register(key, () => {
+        if (key === settings.createHotkey) summon('create');
+        else if (key === settings.graphHotkey) summon('graph');
+      });
       if (!success) throw new Error('快捷键 ' + key + ' 已被占用，请设置其他组合。');
       registered.set(key, true); added.push(key);
     }
@@ -183,13 +200,15 @@ function configureHotkeys(candidate, initial = false) {
   } catch (error) {
     if (!initial) for (const key of added) { globalShortcut.unregister(key); registered.delete(key); }
     throw error;
-  }
+  } finally { if (mode === 'ready') setReadyEscape(true); }
 }
 function setInteractive(value) {
   if (!win || win.isDestroyed() || interactive === value) return;
   interactive = value; win.setIgnoreMouseEvents(!value, { forward: true });
 }
 function setRegions(payload) {
+  if (mode === 'ready' && !Object.hasOwn(payload ?? {}, 'readyActivation')) return false;
+  if (payload && Object.hasOwn(payload, 'readyActivation') && (mode !== 'ready' || payload.readyActivation !== activationId)) return false;
   if (!payload || !Array.isArray(payload.regions) || payload.regions.length > 80) throw new Error('交互区域无效。');
   regions = payload.regions.map(rect => {
     if (!rect || !['x', 'y', 'width', 'height'].every(k => Number.isFinite(rect[k]) && Math.abs(rect[k]) <= 50000) || rect.width < 0 || rect.height < 0) throw new Error('交互区域无效。');
@@ -197,15 +216,60 @@ function setRegions(payload) {
   });
   dragUntil = payload.dragging === true ? Date.now() + 30000 : 0;
   refreshHitTest(screen.getCursorScreenPoint());
+  return true;
 }
 function refreshHitTest(point) {
   if (!win || win.isDestroyed()) return;
   const bounds = win.getBounds(), x = point.x - bounds.x, y = point.y - bounds.y;
   setInteractive(Date.now() < dragUntil || regions.some(r => x >= r.x && y >= r.y && x <= r.x + r.width && y <= r.y + r.height));
 }
+function cancelActivation() {
+  activationId++;
+  activationPending = false;
+  clearTimeout(activationTimer);
+}
+function activateWindow() {
+  cancelActivation();
+  const requestedId = activationId;
+  activationPending = true;
+  try {
+    // A visible, non-focusable overlay does not necessarily re-enter native
+    // activation when show() is called. Re-show that window after restoring its
+    // focusability, then focus the Chromium child that receives keyboard input.
+    // This transition belongs only to an explicit summon, never the idle loop.
+    if (!win.isFocusable()) win.hide();
+    win.setFocusable(true);
+    win.setSkipTaskbar(true);
+    setInteractive(true);
+    win.show();
+    win.focus();
+    win.webContents.focus();
+  } finally {
+    // Temporary input acceptance must end in this same turn, including failure.
+    try { refreshHitTest(screen.getCursorScreenPoint()); } catch { setInteractive(false); }
+    activationTimer = setTimeout(() => {
+      if (requestedId !== activationId || !rendererReady || !win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+      // One bounded confirmation permits the native show/focus messages to
+      // settle. Never retry bringing a background window to the foreground.
+      if (win.isFocused()) win.webContents.focus();
+      activationPending = false;
+    }, 40);
+    activationTimer.unref();
+  }
+  return requestedId;
+}
 function summon(nextMode = 'graph', internal = false) {
   if (!win || win.isDestroyed() || !rendererReady) return;
   if (!['ready', 'create', 'graph'].includes(nextMode)) throw new Error('呼出模式无效。');
+  if (nextMode === 'ready' && mode !== 'idle' && mode !== 'ready') return;
+  if (internal && win.isFocusable()) {
+    // A real click already activated the renderer. Keep its native/DOM focus
+    // and screen position while it reveals the task card.
+    mode = nextMode; roaming = false; circles.reset(); speedDismiss.reset(Date.now());
+    cancelActivation();
+    setReadyEscape(mode === 'ready');
+    return;
+  }
   let point;
   try { point = screen.getCursorScreenPoint(); }
   catch {
@@ -215,34 +279,70 @@ function summon(nextMode = 'graph', internal = false) {
   const display = screen.getDisplayNearestPoint(point);
   const current = win.getBounds(), area = display.workArea;
   if (current.x !== area.x || current.y !== area.y || current.width !== area.width || current.height !== area.height) { regions = []; win.setBounds(area); }
-  mode = nextMode; circles.reset(); shake.reset();
-  win.show(); win.focus();
-  if (!internal) send({ type: 'summon', mode, point: { x: point.x - area.x, y: point.y - area.y } });
+  mode = nextMode; roaming = false; circles.reset(); speedDismiss.reset(Date.now());
+  let requestedId;
+  if (mode === 'ready') {
+    cancelActivation(); requestedId = activationId;
+    regions = []; dragUntil = 0; setInteractive(false);
+    // A mouse-only summon stays decorative until the user clicks its landing
+    // button. showInactive leaves the foreground application's keyboard alone.
+    win.setFocusable(true); win.setSkipTaskbar(true); win.showInactive();
+  } else requestedId = activateWindow();
+  setReadyEscape(mode === 'ready');
+  if (!internal) send({ type: 'summon', activationId: requestedId, mode, escapeAvailable: readyEscapeRegistered, point: { x: point.x - area.x, y: point.y - area.y } });
   refreshHitTest(point);
 }
 function hideOverlay(disperse = false) {
-  mode = 'idle'; dragUntil = 0; circles.reset(); shake.reset(); regions = [];
+  cancelActivation();
+  mode = 'idle'; roaming = false; dragUntil = 0; circles.reset(); speedDismiss.reset(); regions = [];
+  setReadyEscape(false);
   setInteractive(false); send({ type: 'hide', disperse });
-  if (win && !win.isDestroyed()) win.blur();
+  if (win && !win.isDestroyed()) { win.setFocusable(false); win.blur(); }
 }
 function requestHide() {
   // Let the renderer commit an active editor before changing hit regions.
   send({ type: 'prepareHide' });
 }
+function setRoaming(active) {
+  if (roaming === active) return;
+  roaming = active;
+  // Decorative activity never changes window focus or hit-test regions.
+  send({ type: 'roaming', active });
+}
+function updateRoaming(now) {
+  if (now < nextRoamCheck) return;
+  nextRoamCheck = now + 1000;
+  try {
+    const seconds = powerMonitor.getSystemIdleTime();
+    setRoaming(mode === 'idle' && settings.effects !== 'off' && settings.idleRoamSeconds > 0 &&
+      Number.isFinite(seconds) && seconds >= settings.idleRoamSeconds && powerMonitor.getSystemIdleState(settings.idleRoamSeconds) !== 'locked');
+  } catch { setRoaming(false); }
+}
 function sampleCursor() {
   if (suspended || !win || win.isDestroyed() || !rendererReady) return;
   const point = screen.getCursorScreenPoint(), now = Date.now();
   refreshHitTest(point);
+  updateRoaming(now);
+  // Speed needs every timestamp, including unchanged cursor positions. Keep it
+  // ahead of the movement-only notification/gesture path below.
+  if (mode === 'ready') {
+    if (now < dragUntil) speedDismiss.reset(now);
+    else {
+      const display = screen.getDisplayNearestPoint(point);
+      if (speedDismiss.addPoint(point.x, point.y, display.bounds.height, now, settings.dismissSpeed)) { lastCursor = point; hideOverlay(true); return; }
+    }
+  }
   if (lastCursor?.x === point.x && lastCursor?.y === point.y) return;
   lastCursor = point;
+  setRoaming(false);
+  nextRoamCheck = now + 1000;
   if (mode === 'ready') {
     const bounds = win.getBounds();
     send({ type: 'cursorPoint', point: { x: point.x - bounds.x, y: point.y - bounds.y } });
-    if (shake.addPoint(point.x, point.y, now)) hideOverlay(true);
-  } else if (settings.gestureEnabled && mode === 'idle') {
+  } else if (settings.gestureEnabled && mode === 'idle' && now >= dragUntil) {
     const display = screen.getDisplayNearestPoint(point);
     if (circles.addPoint(point.x, point.y, display.bounds.height, now)) summon('ready');
-  }
+  } else circles.reset();
 }
 function pollCursor() {
   clearTimeout(sampleTimer);
@@ -252,7 +352,7 @@ function pollCursor() {
   catch {
     cursorFailures = Math.min(cursorFailures + 1, 3);
     delay = cursorFailures < 3 ? 1000 : 5000;
-    circles.reset(); shake.reset(); lastCursor = null; dragUntil = 0;
+    circles.reset(); speedDismiss.reset(); lastCursor = null; dragUntil = 0;
     // A locked or unavailable desktop must not crash the host or leave the
     // transparent window intercepting another application's mouse input.
     try { setInteractive(false); } catch {}
@@ -276,11 +376,12 @@ function trayImage() {
 function requestExit() {
   if (quitting || exitRequested) return;
   exitRequested = true;
+  setReadyEscape(false);
   // The renderer may decline because a draft is open. This guard only debounces
   // duplicate clicks and expires even when it never acknowledges prepareExit.
   setTimeout(() => { exitRequested = false; }, 2000).unref();
   if (!rendererReady) { void shutdown().catch(error => { exitRequested = false; send({ type: 'error', message: error.message }); }); return; }
-  win.show(); win.focus(); send({ type: 'prepareExit' });
+  activateWindow(); send({ type: 'prepareExit' });
 }
 async function shutdown() {
   if (quitting) return;
@@ -304,7 +405,7 @@ async function invoke(method, payload) {
   if (method === 'bootstrap') return stateEnvelope();
   if (method === 'hide') { hideOverlay(payload.disperse === true); return stateEnvelope(); }
   if (method === 'summon') { summon(payload.mode || 'graph', payload.internal === true); return stateEnvelope(); }
-  if (method === 'setRegions') { setRegions(payload); return stateEnvelope(); }
+  if (method === 'setRegions') { const accepted = setRegions(payload); return Object.hasOwn(payload, 'readyActivation') ? accepted : stateEnvelope(); }
   if (method === 'quit') { await shutdown(); return stateEnvelope(); }
   let result;
   if (mutationMethods.has(method)) {
@@ -337,11 +438,14 @@ async function invoke(method, payload) {
       if (picked.canceled) return stateEnvelope();
       candidate.dataFolder = picked.filePaths[0];
     } else {
-      for (const key of ['effects', 'gestureEnabled', 'createHotkey', 'graphHotkey']) if (Object.hasOwn(payload, key)) candidate[key] = payload[key];
+      for (const key of ['effects', 'gestureEnabled', 'idleRoamSeconds', 'dismissSpeed', 'createHotkey', 'graphHotkey']) if (Object.hasOwn(payload, key)) candidate[key] = payload[key];
     }
-    checkSettings(candidate); configureHotkeys(candidate); settings = candidate;
-    try { await saveSettings(true); } catch (error) { settings = previous; configureHotkeys(previous); throw error; }
-    circles.reset();
+    checkSettings(candidate); configureHotkeys(candidate);
+    try { await saveSettings(true, candidate); } catch (error) { configureHotkeys(previous); throw error; }
+    settings = candidate;
+    circles.reset(); speedDismiss.reset(Date.now());
+    nextRoamCheck = 0;
+    updateRoaming(Date.now());
   } else throw new Error('不支持的桌面操作。');
   return acceptState(lastState);
 }
@@ -392,11 +496,10 @@ else {
       try { const file = fileURLToPath(details.url); const relative = path.relative(webRoot, file); permitted = !relative.startsWith('..') && !path.isAbsolute(relative); } catch { permitted = details.url.startsWith('data:'); }
       callback({ cancel: !permitted });
     });
-    win.webContents.on('render-process-gone', () => { rendererReady = false; regions = []; dragUntil = 0; setInteractive(false); win.hide(); warningList.push('界面进程已停止，已保存数据保留。点击托盘重新载入。'); });
+    win.webContents.on('render-process-gone', () => { rendererReady = false; cancelActivation(); setReadyEscape(false); regions = []; dragUntil = 0; setInteractive(false); win.hide(); warningList.push('界面进程已停止，已保存数据保留。点击托盘重新载入。'); });
     win.webContents.on('unresponsive', () => { regions = []; dragUntil = 0; setInteractive(false); });
     win.on('close', event => { if (!quitting) { event.preventDefault(); requestHide(); } });
-    win.on('blur', () => { if (mode === 'ready') hideOverlay(true); });
-    win.webContents.on('did-finish-load', () => { rendererReady = true; win.show(); win.focus(); send({ type: 'summon', mode: 'graph', point: { x: area.width / 2, y: area.height / 2 } }); });
+    win.webContents.on('did-finish-load', () => { rendererReady = true; mode = 'graph'; const requestedId = activateWindow(); send({ type: 'summon', activationId: requestedId, mode, point: { x: area.width / 2, y: area.height / 2 } }); });
     ipcMain.handle('deskghost:invoke', (event, method, payload = {}) => {
       validateSender(event);
       if (typeof method !== 'string' || !payload || typeof payload !== 'object' || Array.isArray(payload) || Buffer.byteLength(JSON.stringify(payload), 'utf8') > 256 * 1024) throw new Error('请求格式无效或超过大小上限。');
@@ -404,7 +507,7 @@ else {
       // file picker. Only document/settings operations enter the serial queue.
       if (method === 'hide') { hideOverlay(payload.disperse === true); return stateEnvelope(); }
       if (method === 'summon') { summon(payload.mode || 'graph', payload.internal === true); return stateEnvelope(); }
-      if (method === 'setRegions') { setRegions(payload); return stateEnvelope(); }
+      if (method === 'setRegions') { const accepted = setRegions(payload); return Object.hasOwn(payload, 'readyActivation') ? accepted : stateEnvelope(); }
       if (pendingOperations >= 32) throw new Error('操作过于频繁，请稍后重试。');
       pendingOperations++;
       const operation = operationQueue.then(() => invoke(method, payload));
@@ -419,9 +522,9 @@ else {
     tray.setContextMenu(Menu.buildFromTemplate([{ label: '创建任务', click: () => summon('create') }, { label: '任务图', click: openGraph }, { type: 'separator' }, { label: '收起', click: requestHide }, { label: '退出 DeskGhost', click: requestExit }]));
     try { configureHotkeys(settings, true); } catch (error) { warningList.push(error.message); }
     pollCursor();
-    powerMonitor.on('suspend', () => { suspended = true; clearTimeout(sampleTimer); circles.reset(); });
-    powerMonitor.on('resume', () => { suspended = false; lastCursor = null; cursorFailures = 0; pollCursor(); });
-    screen.on('display-removed', () => { if (win && !win.isDestroyed()) { regions = []; win.setBounds(screen.getPrimaryDisplay().workArea); send({ type: 'summon', mode, point: { x: 300, y: 200 } }); } });
+    powerMonitor.on('suspend', () => { suspended = true; clearTimeout(sampleTimer); circles.reset(); setReadyEscape(false); setRoaming(false); });
+    powerMonitor.on('resume', () => { suspended = false; lastCursor = null; cursorFailures = 0; setReadyEscape(mode === 'ready'); pollCursor(); });
+    screen.on('display-removed', () => { if (win && !win.isDestroyed()) { regions = []; win.setBounds(screen.getPrimaryDisplay().workArea); if (mode === 'ready') summon('ready'); else send({ type: 'summon', activationId, mode, point: { x: 300, y: 200 } }); } });
     screen.on('display-metrics-changed', () => { if (win && !win.isDestroyed()) { const display = screen.getDisplayMatching(win.getBounds()); regions = []; win.setBounds(display.workArea); } });
     await win.loadFile(rendererPath);
   }).catch(error => {

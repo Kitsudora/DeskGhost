@@ -19,8 +19,70 @@ export function validateConnection(source, target, links = [], replacedLink = nu
     !(replacedLink && link.sourceId === replacedLink.sourceId && link.targetId === replacedLink.targetId));
 }
 
+/** Plan a new relationship, shifting its target and descendants only when needed. */
+export function planConnection(tasks, links, sourceId, targetId) {
+  const byId = tasks instanceof Map ? tasks : new Map(tasks.map(task => [task.id, task]));
+  const source = byId.get(sourceId), target = byId.get(targetId);
+  const reject = reason => ({ valid: false, reason });
+  if (!source || !target || source.deletedAt || target.deletedAt) return reject('请连接未删除的任务。');
+  if (sourceId === targetId) return reject('任务不能连接到自己。');
+  if (links.some(link => link.sourceId === sourceId && link.targetId === targetId)) return reject('这两个任务已经连接。');
+  if (links.length >= 8000) return reject('连线数量已达到上限。');
+  if (source.column < target.column) return { valid: true, column: target.column, row: target.row, movedCount: 0 };
+  const outgoing = new Map();
+  for (const link of links) {
+    if (!outgoing.has(link.sourceId)) outgoing.set(link.sourceId, []);
+    outgoing.get(link.sourceId).push(link.targetId);
+  }
+  const descendants = new Set();
+  const pending = [targetId];
+  while (pending.length) {
+    const id = pending.pop();
+    if (id === sourceId) return reject('这条连接会形成循环，无法创建。');
+    if (descendants.has(id)) continue;
+    descendants.add(id);
+    for (const next of outgoing.get(id) || []) pending.push(next);
+  }
+  // Existing columns are already a topological order. Propagating in that
+  // order preserves every other parent constraint without repeated traversal.
+  const order = [...descendants].map(id => byId.get(id)).filter(Boolean).sort((a, b) => a.column - b.column);
+  const columns = new Map([[targetId, source.column + 1]]);
+  let movedCount = 0;
+  for (const task of order) {
+    const column = columns.get(task.id) ?? task.column;
+    if (column > 255) return reject('连接后会超过 256 个时间列，请先调整任务位置。');
+    if (column !== task.column) movedCount++;
+    for (const next of outgoing.get(task.id) || []) {
+      const original = byId.get(next);
+      if (original) columns.set(next, Math.max(columns.get(next) ?? original.column, column + 1));
+    }
+  }
+  const occupied = new Map();
+  const mark = (column, row, change) => {
+    if (!occupied.has(column)) occupied.set(column, new Map());
+    const rows = occupied.get(column);
+    rows.set(row, (rows.get(row) || 0) + change);
+  };
+  for (const task of byId.values()) if (!task.deletedAt) mark(task.column, task.row, 1);
+  let targetRow = target.row;
+  // Match the host's stable document order when shifted cards need a free row.
+  for (const task of byId.values()) {
+    const column = columns.get(task.id) ?? task.column;
+    if (column === task.column) continue;
+    let row = task.row;
+    if (occupied.get(column)?.get(row)) {
+      row = 0;
+      while (occupied.get(column)?.get(row)) row++;
+    }
+    mark(task.column, task.row, -1);
+    mark(column, row, 1);
+    if (task.id === targetId) targetRow = row;
+  }
+  return { valid: true, column: columns.get(targetId), row: targetRow, movedCount };
+}
+
 export function snapPosition(position, columnCount, tasks = [], excludedId) {
-  const column = clamp(Math.round(position.x / COLUMN_STEP), 0, Math.max(0, columnCount - 1));
+  const column = clamp(Math.round(position.x / COLUMN_STEP), 0, Math.min(255, Math.max(0, columnCount)));
   const desired = clamp(Math.round((position.y - TOP) / ROW_STEP), 0, 4095);
   const occupied = new Set([...tasks].filter(task => !task.deletedAt && task.id !== excludedId && task.column === column).map(task => task.row));
   for (let distance = 0; distance <= 4095; distance++) {
@@ -91,7 +153,7 @@ export class TaskGraph {
     this.container.classList.add('dg-graph');
     this.container.tabIndex = 0;
     this.container.setAttribute('role', 'region');
-    this.container.setAttribute('aria-label', '任务图。拖动卡片移动，拖动圆点连接任务；方向键移动，Alt 加方向键平移视图。');
+    this.container.setAttribute('aria-label', '任务图。拖动卡片移动，拖到最右侧新建时间列；拖动圆点连接任务，后续任务自动移到来源右侧；方向键移动，Alt 加方向键平移视图。');
     this.stage = element('div', 'dg-graph-stage');
     this.columnsLayer = element('div', 'dg-columns');
     this.edgeLayer = svgElement('svg', { class: 'dg-edges', 'aria-label': '任务关联' });
@@ -112,15 +174,18 @@ export class TaskGraph {
     this.preview.style.display = 'none';
     this.edgeLayer.append(this.preview);
     this.stage.append(this.columnsLayer, this.edgeLayer, this.ghost, this.cardsLayer);
+    this.linkHint = element('div', 'dg-link-hint');
+    this.linkHint.setAttribute('role', 'status');
+    this.linkHint.hidden = true;
     this.empty = element('div', 'dg-graph-empty');
     this.empty.append(element('span', 'dg-empty-symbol', '◇'), element('h2', '', '把想法，放在这里。'), element('p', '', '创建第一个任务，让每一步自然延续。'));
     const create = button('dg-empty-create', '创建任务', '＋  新建任务');
     create.addEventListener('click', () => callbacks.onCreate?.({ sourceIds: [], column: 0, row: 0 }));
     this.empty.append(create);
     this.help = element('div', 'dg-graph-help');
-    this.help.append(element('span', '', '拖动圆点连接'), element('i'), element('span', '', '拖动空白平移'), element('i'), element('span', '', 'Ctrl + 滚轮缩放'));
+    this.help.append(element('span', '', '拖动圆点连接'), element('i'), element('span', '', '拖到最右侧新建阶段'), element('i'), element('span', '', '拖动空白平移'), element('i'), element('span', '', 'Ctrl + 滚轮缩放'));
     this.zoomLabel = element('output', 'dg-zoom-label', '100%');
-    this.container.replaceChildren(this.stage, this.empty, this.help, this.zoomLabel);
+    this.container.replaceChildren(this.stage, this.empty, this.help, this.zoomLabel, this.linkHint);
     const events = { signal: this.abort.signal };
     this.container.addEventListener('pointerdown', (event) => this.pointerDown(event), events);
     this.container.addEventListener('pointermove', (event) => this.pointerMove(event), events);
@@ -199,6 +264,7 @@ export class TaskGraph {
     this.selectedEdge = null;
     this.cardsLayer.replaceChildren();
     this.columnsLayer.replaceChildren();
+    this.appendZone = null;
     this.edgesGroup.replaceChildren();
     this.empty.hidden = this.visibleTasks.length !== 0 || !this.workspace;
     const history = this.options.history;
@@ -219,7 +285,7 @@ export class TaskGraph {
     }
     const maxRow = Math.max(1, ...this.visibleTasks.map(task => this.positions.get(task.id).y / ROW_STEP));
     this.worldHeight = Math.max(700, (maxRow + 1) * ROW_STEP + TOP);
-    this.worldWidth = Math.max(1, lanes.length) * COLUMN_STEP;
+    this.worldWidth = (Math.max(1, lanes.length) + (!this.options.categoryView && lanes.length < 256 ? 1 : 0)) * COLUMN_STEP;
     lanes.forEach((lane, index) => {
       const column = element('section', 'dg-column');
       column.style.transform = `translateX(${index * COLUMN_STEP}px)`;
@@ -234,6 +300,19 @@ export class TaskGraph {
       column.append(heading);
       this.columnsLayer.append(column);
     });
+    if (!this.options.categoryView && this.workspace.columns.length < 256) {
+      const nextColumn = this.workspace.columns.length;
+      this.appendZone = element('section', 'dg-new-column');
+      this.appendZone.dataset.column = String(nextColumn);
+      this.appendZone.style.transform = `translateX(${nextColumn * COLUMN_STEP}px)`;
+      this.appendZone.style.height = `${this.worldHeight}px`;
+      const add = button('dg-new-column-button', '新增时间列，也可以直接将卡片拖到这里', '＋ 新时间列');
+      add.addEventListener('click', () => this.commit('insertColumn', { index: nextColumn }));
+      const label = element('div', 'dg-new-column-label');
+      label.append(element('span', '', '拖到这里'), element('strong', '', '新建时间列'), element('small', '', '松开后创建，并移入卡片'));
+      this.appendZone.append(add, label);
+      this.columnsLayer.append(this.appendZone);
+    }
     for (const task of this.visibleTasks) this.renderCard(task);
     if (!this.options.categoryView) {
       for (const link of (this.workspace.links || []).slice(0, 8000)) {
@@ -389,6 +468,8 @@ export class TaskGraph {
   }
 
   capture(event) {
+    this.interaction.panOrigin = { x: this.camera.x, y: this.camera.y };
+    this.interaction.lastPanTime = performance.now();
     this.container.setPointerCapture(event.pointerId);
     this.container.classList.add('is-interacting');
   }
@@ -455,6 +536,7 @@ export class TaskGraph {
   processPointer(event) {
     const interaction = this.interaction;
     if (!interaction) return;
+    interaction.lastPointer = { clientX: event.clientX, clientY: event.clientY };
     if (interaction.type === 'pan') {
       const dx = event.clientX - interaction.startClient.x;
       const dy = event.clientY - interaction.startClient.y;
@@ -475,11 +557,13 @@ export class TaskGraph {
       this.cards.get(interaction.id).classList.add('is-dragging');
       const { column, row } = snapPosition(position, this.workspace.columns.length, this.tasks.values(), interaction.id);
       const valid = this.validMove(interaction.id, column);
+      const appending = column === this.workspace.columns.length;
       interaction.drop = { column, row, valid };
+      this.appendZone?.classList.toggle('is-active', appending && valid);
       this.ghost.hidden = false;
       this.ghost.classList.toggle('is-invalid', !valid);
       this.ghost.style.transform = `translate3d(${column * COLUMN_STEP}px, ${TOP + row * ROW_STEP}px, 0)`;
-      this.ghost.firstChild.textContent = valid ? `第 ${column + 1} 阶段 · 松开以吸附` : '后续任务必须位于来源右侧';
+      this.ghost.firstChild.textContent = valid ? appending ? `松开以新建第 ${column + 1} 阶段，并移入卡片` : `第 ${column + 1} 阶段 · 松开以吸附` : '后续任务必须位于来源右侧';
     } else if (interaction.type === 'link') {
       interaction.targetId = this.linkTarget(event, interaction);
       for (const [id, node] of this.cards) node.classList.toggle('is-link-target', id === interaction.targetId);
@@ -514,17 +598,19 @@ export class TaskGraph {
         const { sourceId, targetId: nextId } = this.linkPair(interaction, targetId);
         if (interaction.edge) {
           if (sourceId !== interaction.edge.sourceId || nextId !== interaction.edge.targetId) this.commit('rewireLink', { sourceId: interaction.edge.sourceId, targetId: interaction.edge.targetId, newSourceId: sourceId, newTargetId: nextId });
-        } else this.commit('addLink', { sourceId, targetId: nextId });
+        } else this.commit('connectTask', { sourceId, targetId: nextId });
       } else if (interaction.edge && !document.elementFromPoint(event.clientX, event.clientY)?.closest('.dg-task-card')) {
         this.commit('removeLink', { sourceId: interaction.edge.sourceId, targetId: interaction.edge.targetId });
         this.toast('已断开连线，可按 Ctrl + Z 撤销。');
-      } else this.toast('把连线拖到右侧后续任务，或从左端连接来源。');
+      } else this.toast(interaction.targetPlan?.reason || '把连线拖到另一张任务卡片；后续任务会自动移到来源右侧。');
     }
   }
 
   finishInteractionUi() {
     this.ghost.hidden = true;
     this.preview.style.display = 'none';
+    this.linkHint.hidden = true;
+    this.appendZone?.classList.remove('is-active');
     this.container.classList.remove('is-interacting', 'is-panning', 'is-linking');
     this.keyboardLink = null;
     for (const card of this.cards.values()) card.classList.remove('is-dragging', 'is-link-target');
@@ -547,13 +633,21 @@ export class TaskGraph {
 
   linkTarget(event, interaction) {
     const node = document.elementFromPoint(event.clientX, event.clientY)?.closest('.dg-task-card');
-    if (!node || !this.container.contains(node)) return null;
+    if (!node || !this.container.contains(node)) {
+      interaction.hoveredId = null;
+      interaction.targetPlan = null;
+      return null;
+    }
     const candidate = node.dataset.taskId;
+    if (interaction.hoveredId === candidate) return interaction.targetPlan?.valid ? candidate : null;
+    interaction.hoveredId = candidate;
     const { sourceId, targetId } = this.linkPair(interaction, candidate);
     const source = this.tasks.get(sourceId);
     const target = this.tasks.get(targetId);
-    if (!validateConnection(source, target, this.workspace.links, interaction.edge)) return null;
-    return candidate;
+    interaction.targetPlan = interaction.edge
+      ? { valid: validateConnection(source, target, this.workspace.links, interaction.edge), reason: '改接时，后续任务必须保持在来源右侧。', column: target?.column, row: target?.row, movedCount: 0 }
+      : planConnection(this.tasks, this.workspace.links, sourceId, targetId);
+    return interaction.targetPlan.valid ? candidate : null;
   }
 
   paintLinkPreview(point) {
@@ -571,6 +665,25 @@ export class TaskGraph {
       const pair = this.linkPair(interaction, interaction.targetId);
       start = this.portPosition(pair.sourceId, 'out');
       end = this.portPosition(pair.targetId, 'in');
+      const plan = interaction.targetPlan;
+      if (plan?.movedCount) {
+        const position = { x: plan.column * COLUMN_STEP, y: TOP + plan.row * ROW_STEP };
+        end = { x: position.x, y: position.y + CARD_HEIGHT / 2 };
+        this.ghost.hidden = false;
+        this.ghost.classList.remove('is-invalid');
+        this.ghost.style.transform = `translate3d(${position.x}px, ${position.y}px, 0)`;
+        this.ghost.firstChild.textContent = '连接后的位置';
+      } else this.ghost.hidden = true;
+    } else this.ghost.hidden = true;
+    const plan = interaction.targetPlan;
+    this.linkHint.hidden = !plan;
+    if (plan) {
+      this.linkHint.classList.toggle('is-invalid', !plan.valid);
+      this.linkHint.textContent = !plan.valid ? plan.reason : plan.movedCount
+        ? `连接并移到第 ${plan.column + 1} 阶段${plan.movedCount > 1 ? ` · 同时右移 ${plan.movedCount - 1} 个后续任务` : ''}`
+        : interaction.edge ? '松开以改接' : '松开以连接';
+      this.linkHint.style.left = `${clamp(point.x * this.camera.scale + this.camera.x + 20, 12, Math.max(12, this.container.clientWidth - 320))}px`;
+      this.linkHint.style.top = `${clamp(point.y * this.camera.scale + this.camera.y + 24, 12, Math.max(12, this.container.clientHeight - 70))}px`;
     }
     this.preview.style.display = '';
     this.preview.classList.toggle('is-valid', !!interaction.targetId);
@@ -603,6 +716,35 @@ export class TaskGraph {
     if (!this.frame) this.frame = requestAnimationFrame(time => this.tick(time));
   }
 
+  panAtEdge(time) {
+    const interaction = this.interaction;
+    if (!interaction?.moved || interaction.type === 'pan' || !interaction.lastPointer) return false;
+    const rect = this.container.getBoundingClientRect();
+    const pointer = interaction.lastPointer;
+    const elapsed = clamp((time - interaction.lastPanTime) / 1000, 0, .04);
+    interaction.lastPanTime = time;
+    const speed = (position, size) => {
+      const margin = Math.min(64, size / 4);
+      if (position < margin) return -700 * Math.pow(clamp((margin - position) / margin, 0, 1), 2);
+      if (position > size - margin) return 700 * Math.pow(clamp((position - size + margin) / margin, 0, 1), 2);
+      return 0;
+    };
+    const vx = speed(pointer.clientX - rect.left, rect.width);
+    const vy = speed(pointer.clientY - rect.top, rect.height);
+    if (!vx && !vy) return false;
+    const scale = this.camera.scale;
+    const minX = Math.min(interaction.panOrigin.x, rect.width - (this.worldWidth + 60) * scale);
+    const minY = Math.min(interaction.panOrigin.y, rect.height - (this.worldHeight + ROW_STEP) * scale);
+    const x = clamp(this.camera.x - vx * elapsed, minX, Math.max(66, interaction.panOrigin.x));
+    const y = clamp(this.camera.y - vy * elapsed, minY, Math.max(24, interaction.panOrigin.y));
+    if (Math.abs(x - this.camera.x) + Math.abs(y - this.camera.y) < .01) return false;
+    this.camera.x = x;
+    this.camera.y = y;
+    this.applyCamera();
+    this.processPointer(pointer);
+    return true;
+  }
+
   tick(time) {
     this.frame = 0;
     if (document.hidden || getComputedStyle(this.container).visibility === 'hidden') {
@@ -622,6 +764,7 @@ export class TaskGraph {
       this.pendingPointer = null;
       this.processPointer(event);
     }
+    const panning = this.panAtEdge(time);
     const dirtyEdges = new Set();
     for (const [id, animation] of this.animations) {
       const progress = clamp((time - animation.start) / 360, 0, 1);
@@ -632,7 +775,7 @@ export class TaskGraph {
       if (progress === 1) this.animations.delete(id);
     }
     for (const key of dirtyEdges) this.paintEdge(key);
-    if (this.animations.size || this.pendingPointer) this.requestFrame();
+    if (this.animations.size || this.pendingPointer || panning) this.requestFrame();
   }
 
   applyCamera() {
@@ -660,7 +803,7 @@ export class TaskGraph {
       const positions = [...this.positions.values()];
       const minX = Math.min(...positions.map(p => p.x));
       const minY = Math.min(...positions.map(p => p.y)) - TOP;
-      const maxX = Math.max(...positions.map(p => p.x)) + CARD_WIDTH;
+      const maxX = Math.max(...positions.map(p => p.x), this.appendZone ? this.workspace.columns.length * COLUMN_STEP : 0) + CARD_WIDTH;
       const maxY = Math.max(...positions.map(p => p.y)) + CARD_HEIGHT;
       const width = this.container.clientWidth;
       const height = this.container.clientHeight;
@@ -693,7 +836,7 @@ export class TaskGraph {
       this.callbacks.onEdit?.(card.dataset.taskId);
     } else if (this.workspace && !this.options.categoryView) {
       const point = this.worldPoint(event);
-      const column = clamp(Math.round(point.x / COLUMN_STEP), 0, this.workspace.columns.length - 1);
+      const column = clamp(Math.round(point.x / COLUMN_STEP), 0, Math.min(255, this.workspace.columns.length));
       this.callbacks.onCreate?.({ sourceIds: [], column, row: this.freeRow(column, clamp(Math.round((point.y - TOP) / ROW_STEP), 0, 4095)) });
     }
   }
@@ -739,7 +882,7 @@ export class TaskGraph {
       event.preventDefault();
       const task = this.tasks.get([...this.selection][0]);
       if (task.deletedAt) return;
-      const column = clamp(task.column + direction[0], 0, this.workspace.columns.length - 1);
+      const column = clamp(task.column + direction[0], 0, Math.min(255, this.workspace.columns.length));
       const row = this.freeRow(column, clamp(task.row + direction[1], 0, 4095), task.id);
       if (this.validMove(task.id, column)) this.commit('moveTask', { taskId: task.id, column, row });
       else this.toast('此位置会违反任务的前后关系。');
@@ -772,13 +915,15 @@ export class TaskGraph {
       return;
     }
     const pair = this.linkPair(this.keyboardLink, taskId);
-    if (!validateConnection(this.tasks.get(pair.sourceId), this.tasks.get(pair.targetId), this.workspace.links)) {
-      this.toast('请选择不同的任务，并保持后续任务在来源右侧。');
+    const plan = planConnection(this.tasks, this.workspace.links, pair.sourceId, pair.targetId);
+    if (!plan.valid) {
+      this.toast(plan.reason);
       return;
     }
     this.keyboardLink = null;
     this.container.classList.remove('is-linking');
-    this.commit('addLink', pair);
+    if (plan.movedCount) this.toast(`连接后移到第 ${plan.column + 1} 阶段${plan.movedCount > 1 ? '，并右移必要的后续任务' : ''}。`);
+    this.commit('connectTask', pair);
   }
 
   destroy() {

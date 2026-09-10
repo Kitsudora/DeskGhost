@@ -10,6 +10,7 @@ if (args.Contains("--benchmark", StringComparer.Ordinal))
 var checks = new (string Name, Func<Task> Run)[]
 {
     ("Branching, merging and forward-only links", Sync(GraphRules)),
+    ("New task placement in the latest stage", Sync(CreationPlacement)),
     ("Task lifecycle, deletion and history", Sync(Lifecycle)),
     ("Transactional edits and undo/redo", Sync(History)),
     ("Malformed workspaces and processing limits", Sync(Validation)),
@@ -94,6 +95,44 @@ static async Task RejectAsync<T>(Func<Task> action) where T : Exception
 
 static void GraphRules()
 {
+    var append = NewSession();
+    var card = append.CreateTask("拖出新阶段", "", "");
+    var beforeAppend = JsonSerializer.Serialize(append.Workspace);
+    var lastColumn = append.Workspace.Columns.Count;
+    append.MoveTask(card.Id, lastColumn, 0);
+    Check(append.Workspace.Columns.Count == lastColumn + 1 && append.Workspace.Tasks[0].Column == lastColumn,
+        "Dragging into the next column must append it and move the card together.");
+    Check(append.Undo() && JsonSerializer.Serialize(append.Workspace) == beforeAppend,
+        "One undo removes the appended column and restores the card.");
+    Reject<WorkspaceValidationException>(() => append.MoveTask(card.Id, lastColumn + 1, 0));
+
+    var connection = NewSession();
+    var quick = connection.CreateTask("快捷创建", "保留内容", "算法研究");
+    var quickChild = connection.CreateTask("已有后续", "", "", [quick.Id]);
+    var lateSource = connection.CreateTask("稍晚的来源", "", "PCB 设计", column: 3);
+    var occupied = connection.CreateTask("保持位置", "", "", column: 4, row: 0);
+    var beforeConnection = JsonSerializer.Serialize(connection.Workspace);
+    connection.ConnectTask(lateSource.Id, quick.Id);
+    Check(connection.Workspace.Tasks.Single(t => t.Id == quick.Id).Column == 4 &&
+          connection.Workspace.Tasks.Single(t => t.Id == quickChild.Id).Column == 5 &&
+          connection.Workspace.Tasks.Single(t => t.Id == quick.Id).Row != occupied.Row &&
+          connection.Workspace.Links.Any(link => link.SourceId == lateSource.Id && link.TargetId == quick.Id),
+        "Connecting a quick task must shift it and necessary successors, avoiding occupied cells.");
+    var afterConnection = JsonSerializer.Serialize(connection.Workspace);
+    var connectionRevision = connection.Revision;
+    Reject<WorkspaceValidationException>(() => connection.ConnectTask(quickChild.Id, lateSource.Id));
+    Check(connection.Revision == connectionRevision && JsonSerializer.Serialize(connection.Workspace) == afterConnection,
+        "A cyclic connection must leave the entire graph and its history unchanged.");
+    Check(connection.Undo() && JsonSerializer.Serialize(connection.Workspace) == beforeConnection &&
+          connection.Redo() && JsonSerializer.Serialize(connection.Workspace) == afterConnection,
+        "Connection, column creation and successor shifts must undo and redo as one edit.");
+    var boundary = NewSession();
+    var early = boundary.CreateTask("早期任务", "", "");
+    var last = boundary.CreateTask("最后一列", "", "", column: WorkspaceLimits.MaxColumns - 1);
+    var beforeBoundary = JsonSerializer.Serialize(boundary.Workspace);
+    Reject<WorkspaceValidationException>(() => boundary.ConnectTask(last.Id, early.Id));
+    Check(JsonSerializer.Serialize(boundary.Workspace) == beforeBoundary, "Column overflow must not partially move tasks.");
+
     var session = NewSession();
     var root = session.CreateTask("起点", "", "PCB 设计");
     var branch = session.CreateTask("分支", "", "算法研究", [root.Id]);
@@ -159,6 +198,42 @@ static void GraphRules()
               candidate.Redo() && !candidate.CanRedo && JsonSerializer.Serialize(candidate.Workspace) == laterJson,
             "A rejected rewire must preserve the complete existing redo branch.");
     }
+}
+
+static void CreationPlacement()
+{
+    var session = NewSession();
+    var earlySource = session.CreateTask("早期来源", "", "", column: 0);
+    var laterSource = session.CreateTask("稍晚来源", "", "", column: 2);
+    session.InsertColumn(3, "空的最新阶段");
+    var beforeCreate = JsonSerializer.Serialize(session.Workspace);
+    var independent = session.CreateTask("独立任务", "保留内容", "算法研究");
+    Check(independent.Column == 3 && independent.Row == 0 && session.Workspace.Columns.Count == 4,
+        "An independent task must use the last logical column even when it is empty, without appending another column.");
+    var afterCreate = JsonSerializer.Serialize(session.Workspace);
+    Check(session.Undo() && JsonSerializer.Serialize(session.Workspace) == beforeCreate &&
+          session.Redo() && JsonSerializer.Serialize(session.Workspace) == afterCreate,
+        "Default placement and task content must undo and redo together without changing existing stages.");
+    var nextIndependent = session.CreateTask("同阶段的另一任务", "", "");
+    Check(nextIndependent.Column == 3 && nextIndependent.Row == 1,
+        "Another independent task must use a free row in the same latest column.");
+    var successor = session.CreateTask("早期任务的后续", "", "", [earlySource.Id]);
+    var merge = session.CreateTask("多来源后续", "", "", [earlySource.Id, laterSource.Id]);
+    Check(successor.Column == 1 && merge.Column == 3 && merge.Row == 2,
+        "Source-based defaults must still follow the rightmost source, independently of the latest workspace stage.");
+    var explicitPlacement = session.CreateTask("指定较早阶段", "", "", column: 0, row: 5);
+    var explicitRow = session.CreateTask("只指定行", "", "", row: 7);
+    Check(explicitPlacement.Column == 0 && explicitPlacement.Row == 5 &&
+          explicitRow.Column == 3 && explicitRow.Row == 7,
+        "Explicit columns and rows must be preserved; an explicit row alone still uses the latest column.");
+    var explicitSuccessor = session.CreateTask("指定后续阶段", "", "", [earlySource.Id], column: 2, row: 4);
+    Check(explicitSuccessor.Column == 2 && explicitSuccessor.Row == 4,
+        "A valid explicit successor column must override only its default placement.");
+    var beforeInvalid = JsonSerializer.Serialize(session.Workspace);
+    Reject<WorkspaceValidationException>(() => session.CreateTask("无效后续", "", "", [laterSource.Id], column: 1));
+    Check(JsonSerializer.Serialize(session.Workspace) == beforeInvalid,
+        "An explicit column left of a source must remain invalid and preserve the workspace.");
+    WorkspaceValidator.Validate(session.Workspace);
 }
 
 static void Lifecycle()

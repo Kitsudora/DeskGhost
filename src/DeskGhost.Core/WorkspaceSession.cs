@@ -39,7 +39,7 @@ public sealed class WorkspaceSession
         {
             WorkspaceValidator.Require(document.Tasks.Count < WorkspaceLimits.MaxTasks, "任务数量已达上限。");
             var minimumColumn = sources.Count == 0 ? 0 : sources.Max(sourceId => ActiveTask(document, sourceId).Column) + 1;
-            var targetColumn = column ?? minimumColumn;
+            var targetColumn = column ?? (sources.Count == 0 ? document.Columns.Count - 1 : minimumColumn);
             WorkspaceValidator.Require(targetColumn >= minimumColumn && targetColumn < WorkspaceLimits.MaxColumns,
                 "新任务必须在全部来源的右侧，且不能超过时间列上限。");
             EnsureColumns(document, targetColumn + 1);
@@ -78,8 +78,10 @@ public sealed class WorkspaceSession
 
     public void MoveTask(Guid taskId, int column, int row) => Edit(document =>
     {
-        WorkspaceValidator.Require(column >= 0 && column < document.Columns.Count, "目标时间列不存在。");
+        WorkspaceValidator.Require(column >= 0 && column <= document.Columns.Count && column < WorkspaceLimits.MaxColumns,
+            "只能移动到现有时间列或紧邻的下一列，且不能超过时间列上限。");
         var card = ActiveTask(document, taskId);
+        EnsureColumns(document, column + 1);
         card.Column = column;
         card.Row = row;
     });
@@ -113,6 +115,45 @@ public sealed class WorkspaceSession
         WorkspaceValidator.Require(source.Column < target.Column, "后续任务必须位于来源任务的右侧。");
         if (!document.Links.Any(link => link.SourceId == sourceId && link.TargetId == targetId))
             document.Links.Add(new TaskLink { SourceId = sourceId, TargetId = targetId });
+    });
+
+    /// <summary>Connects an existing task, shifting it and affected successors right in one transaction.</summary>
+    public void ConnectTask(Guid sourceId, Guid targetId) => Edit(document =>
+    {
+        var source = ActiveTask(document, sourceId);
+        var target = ActiveTask(document, targetId);
+        WorkspaceValidator.Require(sourceId != targetId, "任务不能连接到自身。");
+        if (document.Links.Any(link => link.SourceId == sourceId && link.TargetId == targetId)) return;
+        var outgoing = document.Links.ToLookup(link => link.SourceId, link => link.TargetId);
+        var visited = new HashSet<Guid>();
+        var pending = new Stack<Guid>();
+        pending.Push(targetId);
+        while (pending.TryPop(out var current))
+        {
+            WorkspaceValidator.Require(current != sourceId, "这条连线会形成循环。");
+            if (!visited.Add(current)) continue;
+            foreach (var next in outgoing[current]) pending.Push(next);
+        }
+
+        var columns = document.Tasks.ToDictionary(task => task.Id, task => task.Column);
+        columns[targetId] = Math.Max(target.Column, source.Column + 1);
+        // Existing columns are already a topological order. Propagate only the
+        // minimum shifts needed to keep every existing edge pointing right.
+        foreach (var task in document.Tasks.OrderBy(task => task.Column))
+        {
+            WorkspaceValidator.Require(columns[task.Id] < WorkspaceLimits.MaxColumns, "连接后将超过时间列上限。");
+            foreach (var next in outgoing[task.Id]) columns[next] = Math.Max(columns[next], columns[task.Id] + 1);
+        }
+        foreach (var task in document.Tasks)
+        {
+            var column = columns[task.Id];
+            if (column == task.Column) continue;
+            if (document.Tasks.Any(other => other.Id != task.Id && other.DeletedAt is null && other.Column == column && other.Row == task.Row))
+                task.Row = FindFreeRow(document, column);
+            task.Column = column;
+        }
+        EnsureColumns(document, columns.Values.Max() + 1);
+        document.Links.Add(new TaskLink { SourceId = sourceId, TargetId = targetId });
     });
 
     public void RemoveLink(Guid sourceId, Guid targetId) => Edit(document =>
