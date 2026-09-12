@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeskGhost · 顶部栏与设置触感预览</title>
+  <style>
+    :root { --ink:#363636; --bar:#f5e7d5; --face:#fff1de; --rim:#9c9283; --paper:#ded2c1; --muted:#837b6e; --accent:#235ae6; --shadow:#363636de; --press:6px; --release:160ms; --bounce:cubic-bezier(.18,1.35,.4,1); --card-scale:1; }
+    * { box-sizing:border-box; }
+    [hidden] { display:none!important; }
+    body { margin:0; color:var(--ink); background:#dfdcd4; font-family:"Segoe UI","Microsoft YaHei",sans-serif; }
+    button,input,select,textarea { font:inherit; color:inherit; }
+    button { cursor:pointer; -webkit-tap-highlight-color:transparent; }
+    button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible { outline:3px solid var(--accent); outline-offset:4px; }
+    button:disabled { cursor:default; opacity:.4; }
+    svg { display:block; }
+    .svg-bank { position:absolute; width:0; height:0; overflow:hidden; }
+    .study { width:min(1320px,100%); margin:auto; padding:25px 32px 24px; }
+    .study-heading { display:flex; justify-content:space-between; gap:16px; color:var(--muted); font-size:10px; letter-spacing:.15em; margin:0 8px 21px; }
+    .study-heading span:last-child { letter-spacing:.05em; }
+    .bar { position:relative; background:var(--bar); border-radius:22px; box-shadow:7px 9px 0 var(--shadow); }
+    .topbar { display:flex; align-items:center; gap:20px; min-height:91px; padding:15px 20px; z-index:5; }
+    .brand { display:flex; align-items:center; gap:12px; margin-right:5px; flex-shrink:0; }
+    .brand svg { width:33px; height:35px; }
+    .brand b { display:block; font-family:"Arial Black","Segoe UI",sans-serif; font-size:23px; letter-spacing:-1px; line-height:1.05; }
+    .brand small { display:block; font-size:9px; color:#938776; letter-spacing:.22em; margin-top:7px; }
+    .divider { align-self:stretch; width:1px; background:#d4c8b6; margin:5px 1px; }
+    .workspace-key { min-width:206px; max-width:290px; }
+    .workspace-key .cap { gap:12px; justify-content:space-between; }
+    .workspace-key .cap>span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .top-spacer { flex:1; }
+    .top-actions { display:flex; gap:10px; }
+    .key { --key-height:52px; position:relative; border:0; padding:0; height:var(--key-height); border-radius:11px; background:transparent; flex-shrink:0; user-select:none; }
+    .well { display:block; position:relative; width:100%; height:100%; overflow:hidden; border-radius:inherit; background:var(--ink); }
+    .plunger { position:absolute; left:2px; right:2px; top:1px; height:calc(100% - 4px); padding:4px 5px 7px; border-radius:10px; background:var(--rim); transform:translateY(0); transition:transform var(--release) var(--bounce); }
+    .cap { display:flex; height:100%; min-width:0; justify-content:center; align-items:center; gap:8px; padding:0 12px; background:var(--face); border-radius:8px; font-size:13px; font-weight:800; white-space:nowrap; }
+    .key:hover:not(:disabled) .cap { background:#fff5e7; }
+    .key:is(:active,.held,[aria-pressed="true"],[aria-selected="true"],[aria-expanded="true"]):not(:disabled) .plunger { transform:translateY(var(--press)); transition:transform 65ms cubic-bezier(.2,.65,.3,1); }
+    .key[aria-selected="true"] .cap,.key[aria-pressed="true"] .cap { color:var(--accent); }
+    .key[aria-selected="true"] .cap::after { content:""; width:5px; height:5px; border-radius:50%; background:currentColor; }
+    .key.small { --key-height:42px; min-width:70px; }
+    .key.small .cap { padding:0 10px; font-size:12px; }
+    .key.square { width:54px; }
+    .key.square.small { min-width:42px; width:42px; }
+    .key.square .cap { padding:0; }
+    .key.setting-key { width:148px; }
+    .key.esc-key { width:74px; }
+    .key.esc-key .cap { padding:0 5px; }
+    .word-setting { width:110px; height:20px; }
+    .word-esc { width:45px; height:20px; }
+    .icon { width:19px; height:19px; flex-shrink:0; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+    .optionsbar { z-index:4; display:flex; align-items:center; gap:18px; padding:12px 16px; min-height:72px; margin-top:19px; border-radius:18px; }
+    .view-tabs { display:flex; gap:9px; }
+    .view-tabs .key { min-width:114px; --key-height:46px; }
+    .view-tabs .cap { font-size:12px; }
+    .view-tabs .icon { width:16px; height:16px; }
+    .workspace-note { display:flex; align-items:center; gap:7px; margin-left:3px; font-size:11px; color:#938775; }
+    .saved-dot { width:6px; height:6px; border-radius:50%; background:#75845a; }
+    .options-end { display:flex; align-items:center; gap:12px; margin-left:auto; }
+    .select-wrap select { width:114px; padding:8px 20px 8px 11px; border:1px solid #d3c5b1; border-radius:8px; background:#eee0cd; font-size:11px; cursor:pointer; }
+    #new-task { --key-height:46px; width:135px; }
+    #new-task .cap { background:#dbe1bc; }
+    .popover { position:absolute; top:calc(100% + 14px); padding:15px; border-radius:17px; background:var(--bar); box-shadow:6px 7px 0 var(--shadow); border:2px solid #c8bca9; z-index:9; }
+    #workspace-menu { left:255px; width:272px; }
+    .popover-label { display:block; font-size:10px; color:#908372; margin:2px 5px 10px; letter-spacing:.12em; }
+    .workspace-option { width:100%; border:0; background:transparent; display:flex; align-items:center; gap:10px; text-align:left; padding:13px 10px; border-radius:9px; }
+    .workspace-option:hover,.workspace-option[aria-checked="true"] { background:#dfd2be; }
+    .workspace-option b { font-size:13px; display:block; }
+    .workspace-option small { display:block; color:#918574; font-size:10px; margin-top:4px; }
+    .workspace-option>span:first-child { width:9px; height:9px; background:#235ae6; border-radius:3px; }
+    .workspace-option:nth-of-type(2)>span:first-child { background:#74835c; }
+    .workspace-option:nth-of-type(3)>span:first-child { background:#c88046; }
+    #search-popover { width:325px; right:182px; }
+    #search-popover input { width:100%; }
+    .search-heading { display:flex; justify-content:space-between; align-items:center; margin-bottom:9px; }
+    .plain-button { padding:5px; border:0; background:transparent; color:#847765; font-size:11px; }
+    .board-wrap { overflow:auto; min-height:440px; margin-top:23px; scrollbar-width:thin; scrollbar-color:#b5ac9c transparent; }
+    .board { position:relative; min-width:1030px; min-height:535px; isolation:isolate; }
+    .column { position:absolute; top:0; bottom:20px; width:320px; border-left:1px dashed #bdb5a777; padding:10px 0 0 25px; pointer-events:none; }
+    .column:first-child { border-left:0; }
+    .column strong { font-family:"Arial Black","Segoe UI",sans-serif; color:#b6afa2; font-size:27px; letter-spacing:-1px; }
+    .column small { color:#a1998a; font-size:10px; margin-left:10px; }
+    .connections { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; }
+    .connections path { fill:none; stroke:#a59b88; stroke-width:2.5; }
+    .connections circle { fill:#f5e7d5; stroke:#a59b88; stroke-width:2; }
+    .task-card { position:absolute; width:244px; min-height:185px; background:var(--paper); border-radius:25px; box-shadow:6px 7px 0 var(--shadow); padding:13px 10px 10px; transform:scale(var(--card-scale)); transform-origin:top left; }
+    .task-card .sticker { position:absolute; width:116px; height:85px; left:-20px; top:-24px; z-index:2; filter:none; }
+    .task-card .sticker.todo { width:92px; height:83px; left:-13px; }
+    .task-card .sticker.inprog { width:125px; height:86px; left:-18px; }
+    .task-number { display:block; text-align:right; color:#a19480; font-size:9px; letter-spacing:.1em; height:34px; padding-right:8px; }
+    .task-title { position:relative; font-size:17px; line-height:1.35; font-weight:850; background:#baaa93; margin:0 -17px 10px 27px; min-height:43px; padding:11px 13px; border-radius:4px 11px 0 4px; }
+    .task-title::after { content:""; position:absolute; right:0; top:100%; width:7px; height:10px; background:#706759; border-radius:0 0 5px 0; }
+    .task-content { background:var(--face); border-radius:16px 16px 20px 20px; padding:12px 13px; }
+    .task-content p { font-size:11px; line-height:1.8; margin:0; min-height:40px; color:#776c5c; overflow-wrap:anywhere; }
+    .task-bottom { display:flex; align-items:center; justify-content:space-between; gap:7px; margin-top:10px; }
+    .category-pill { font-size:9px; padding:3px 6px; border-radius:4px; background:#e6dcc9; color:#827460; }
+    .task-status { font-size:9px; color:#978b78; }
+    .board-footer { display:flex; justify-content:space-between; align-items:center; gap:20px; padding:12px 7px 0; color:#8a8172; font-size:10px; }
+    .board-footer p { margin:0; }
+    .empty { position:absolute; top:130px; left:0; right:0; text-align:center; color:#948876; font-size:13px; }
+    .category-board { display:flex; align-items:flex-start; gap:34px; min-width:0; padding:10px 28px 35px; }
+    .category-column { width:278px; flex-shrink:0; }
+    .category-heading { display:flex; align-items:center; justify-content:space-between; border-bottom:2px solid #c2b7a5; margin-bottom:48px; padding:5px 2px 13px; font-size:13px; font-weight:800; }
+    .category-heading span { font-size:10px; color:#968b79; }
+    .category-board .task-card { position:relative; left:auto!important; top:auto!important; margin:0 0 44px 14px; }
+    .rest { min-height:620px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:22px; color:#8c8272; font-size:13px; }
+    .rest svg { width:68px; height:68px; fill:#fff7eb; filter:drop-shadow(3px 4px 0 #b0a795); }
+    .rest .key { width:154px; }
+    dialog { color:var(--ink); border:0; padding:0; background:var(--paper); border-radius:25px; box-shadow:8px 10px 0 var(--shadow); overflow:visible; max-height:calc(100dvh - 70px); max-width:calc(100vw - 44px); }
+    dialog::backdrop { background:#36363625; }
+    dialog[open] { animation:panel-in 180ms cubic-bezier(.18,.85,.25,1) both; }
+    @keyframes panel-in { from { opacity:0; translate:0 12px; } to { opacity:1; translate:0 0; } }
+    .settings { width:520px; margin:auto 40px auto auto; }
+    .panel-inner { max-height:calc(100dvh - 70px); overflow:auto; border-radius:25px; scrollbar-width:thin; scrollbar-color:#baad99 transparent; }
+    .panel-head { display:flex; align-items:center; justify-content:space-between; gap:15px; padding:21px 23px 12px; }
+    .panel-head .panel-eyebrow { display:block; color:#978870; letter-spacing:.15em; font-size:9px; margin-bottom:10px; }
+    .panel-head .word-setting { width:156px; height:26px; }
+    .settings-tabs { display:flex; gap:8px; padding:14px 23px 20px; }
+    .settings-tabs .key { flex:1; min-width:0; --key-height:44px; }
+    .settings-tabs .cap { font-size:12px; }
+    .settings-body { margin:0 15px; padding:8px 19px 18px; border-radius:20px; background:var(--face); min-height:330px; }
+    .setting-row { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:18px 0; border-bottom:1px solid #e5d7c3; }
+    .setting-row:last-child { border:0; }
+    .setting-copy { min-width:0; }
+    .setting-copy strong { display:block; font-size:13px; font-weight:750; }
+    .setting-copy small { display:block; color:#a2937b; font-size:10px; line-height:1.65; margin-top:5px; }
+    .switch { position:relative; display:block; flex-shrink:0; width:66px; height:33px; }
+    .switch input { position:absolute; margin:0; inset:0; width:100%; height:100%; appearance:none; border:0; border-radius:9px; background:#b6aa96; box-shadow:inset 2px 3px 0 #847866; cursor:pointer; }
+    .switch input:checked { background:#73835d; box-shadow:inset 2px 3px 0 #4f6040; }
+    .switch .switch-cap { pointer-events:none; position:absolute; left:3px; top:3px; width:29px; height:26px; border-radius:7px; background:#fff1de; box-shadow:0 3px 0 #9c9283; transition:transform var(--release) var(--bounce); display:flex; align-items:center; justify-content:center; }
+    .switch .switch-cap::after { content:""; width:6px; height:9px; border-left:1px solid #ccbea7; border-right:1px solid #ccbea7; }
+    .switch input:checked+.switch-cap { transform:translateX(31px); }
+    .setting-stack { display:block; }
+    .choice-row { display:flex; gap:7px; margin-top:12px; }
+    .choice-row .key { flex:1; --key-height:40px; min-width:0; }
+    .choice-row .cap { font-size:11px; padding:0 7px; }
+    .slider-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .value-stamp { display:block; min-width:65px; text-align:center; padding:5px 8px; color:#71624d; border-radius:5px; background:#e7dbc8; box-shadow:inset 1px 2px 0 #c8baa2; font-size:12px; font-weight:700; font-variant-numeric:tabular-nums; }
+    .range { display:block; width:100%; height:27px; margin:13px 0 0; accent-color:#83765f; cursor:ew-resize; appearance:none; background:transparent; }
+    .range::-webkit-slider-runnable-track { height:8px; background:#c0b39f; border-radius:4px; box-shadow:inset 1px 2px 0 #938671; }
+    .range::-webkit-slider-thumb { appearance:none; width:22px; height:20px; background:var(--face); border:3px solid var(--rim); border-radius:6px; margin-top:-7px; box-shadow:0 3px 0 #5c5243; }
+    .field { border:2px solid #c4b6a0; border-radius:9px; background:#f5e7d5; padding:10px 11px; box-shadow:inset 1px 2px 0 #dacebc; font-size:12px; min-width:0; }
+    .setting-row .field { max-width:170px; }
+    .shortcut-field { width:168px; font-family:Consolas,monospace; font-size:11px; }
+    .settings-foot { padding:19px 23px 21px; }
+    .settings-foot-top { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .settings-foot .key { width:118px; --key-height:46px; }
+    #save-settings .cap { background:#dbe1bc; }
+    .panel-note { color:#9c8d76; font-size:10px; line-height:1.6; margin:13px 0 0; }
+    .shortcut-note { padding:10px 0 7px; color:#9e8f78; font-size:11px; line-height:1.8; }
+    .error { font-size:11px; color:#a44939; line-height:1.6; margin:10px 0 0; }
+    .error:empty { display:none; }
+    .creator { width:440px; }
+    .creator h2 { font-size:22px; margin:0; }
+    .creator form { padding:0 23px 23px; }
+    .creator label { display:block; font-size:11px; color:#897a64; margin:13px 0 7px; }
+    .creator .field { display:block; width:100%; }
+    .creator textarea { resize:vertical; min-height:85px; max-height:200px; }
+    .creator-actions { display:flex; justify-content:space-between; align-items:center; margin-top:20px; gap:15px; }
+    .creator-actions .key { width:125px; --key-height:46px; }
+    .creator-actions small { font-size:10px; color:#9a8a73; }
+    .toast { position:fixed; bottom:26px; left:50%; transform:translateX(-50%); padding:12px 20px; background:var(--face); border:2px solid #b4a58e; border-radius:10px; box-shadow:4px 5px 0 var(--shadow); font-size:12px; z-index:30; max-width:calc(100vw - 50px); }
+    html[data-shadow="off"] { --shadow:transparent; }
+    html[data-rebound="off"] { --bounce:ease-out; --release:90ms; }
+    html[data-motion="low"] { --release:90ms; }
+    html[data-motion="off"] .plunger,html[data-motion="off"] .switch-cap { transition:none!important; }
+    html[data-motion="off"] dialog[open] { animation:none; }
+    @media(prefers-reduced-motion:reduce) { .plunger,.switch-cap { transition:none!important; } dialog[open] { animation:none; } }
+    @media(max-width:1080px) { .study { padding:22px; } .topbar { gap:12px; } .brand b { font-size:20px; } .brand small { display:none; } .workspace-key { min-width:180px; max-width:240px; } .workspace-note { display:none; } .settings { margin:auto 24px auto auto; } }
+    @media(max-width:800px) { .topbar { flex-wrap:wrap; } .top-spacer { display:none; } .top-actions { margin-left:auto; } .topbar .divider { display:none; } .brand { margin-right:auto; } .workspace-key { min-width:190px; } .optionsbar { flex-wrap:wrap; gap:12px; } .options-end { width:100%; justify-content:space-between; margin:0; } .view-tabs { width:100%; } .view-tabs .key { flex:1; min-width:0; } #workspace-menu { left:12px; } #search-popover { right:12px; } .board-footer { align-items:flex-start; flex-direction:column; gap:8px; } }
+    @media(max-width:480px) { .study { padding:18px 14px; } .study-heading { font-size:8px; margin:0 2px 16px; } .study-heading span:last-child { display:none; } .topbar { padding:14px; gap:13px; } .brand b { font-size:21px; } .brand svg { width:28px; } .workspace-key { min-width:0; width:100%; max-width:none; order:3; } .top-actions { gap:6px; } .top-actions .square { width:44px; } .setting-key { width:120px!important; } .setting-key .word-setting { width:90px; } .esc-key { width:61px!important; } .key { --key-height:46px; } .settings { margin:auto; } .panel-head { padding:18px 18px 10px; } .settings-tabs { padding:10px 15px 15px; } .settings-body { margin:0 10px; padding:4px 13px 12px; } .settings-foot { padding:16px; } .setting-row { gap:10px; } .setting-row .field { max-width:146px; } .setting-copy strong { font-size:12px; } #search-popover { max-width:calc(100vw - 56px); } }
+  </style>
+</head>
+<body>
+<svg class="svg-bank" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs><symbol id="word-setting" viewBox="433.86798095703125 40.59500503540039 234.0030517578125 36.80600357055664">
+        <path d="M451.86,77.4h-16.152c-1.227,0-1.84-.613-1.84-1.84v-5.98c0-1.228.613-1.841,1.84-1.841h13.75c.442,0,.775-.145.997-.435.221-.289.333-.639.333-1.048,0-.579-.111-1.005-.333-1.277-.222-.272-.554-.426-.997-.46l-7.667-1.074c-2.386-.374-4.302-1.166-5.75-2.376-1.449-1.21-2.172-3.246-2.172-6.108v-5.367c0-2.931.937-5.163,2.812-6.696,1.874-1.534,4.464-2.301,7.77-2.301h14.312c1.227,0,1.84.613,1.84,1.841v6.082c0,1.228-.613,1.841-1.84,1.841h-11.91c-.92,0-1.38.511-1.38,1.533,0,.989.46,1.533,1.38,1.636l7.616,1.022c1.602.238,2.999.656,4.191,1.252,1.192.597,2.122,1.475,2.786,2.633.665,1.159.997,2.692.997,4.601v5.367c0,2.896-.938,5.12-2.812,6.67-1.875,1.552-4.464,2.326-7.77,2.326Z" style="fill: #363636;"></path>
+        <path d="M493.57,77.4h-23.718c-1.227,0-1.84-.613-1.84-1.84v-33.123c0-1.228.614-1.841,1.84-1.841h23.718c1.227,0,1.84.613,1.84,1.841v5.98c0,1.227-.614,1.84-1.84,1.84h-14.108v3.936h9.967c1.227,0,1.84.614,1.84,1.841v5.469c0,1.228-.613,1.841-1.84,1.841h-9.967v4.396h14.108c1.227,0,1.84.613,1.84,1.841v5.98c0,1.227-.614,1.84-1.84,1.84Z" style="fill: #363636;"></path>
+        <path d="M518.821,77.4h-8.281c-1.227,0-1.84-.613-1.84-1.84v-25.099h-7.514c-1.227,0-1.84-.613-1.84-1.84v-6.185c0-1.228.613-1.841,1.84-1.841h26.989c1.227,0,1.84.613,1.84,1.841v6.185c0,1.227-.613,1.84-1.84,1.84h-7.514v25.099c0,1.227-.613,1.84-1.84,1.84Z" style="fill: #363636;"></path>
+        <path d="M552.352,77.4h-8.28c-1.228,0-1.841-.613-1.841-1.84v-25.099h-7.514c-1.227,0-1.84-.613-1.84-1.84v-6.185c0-1.228.613-1.841,1.84-1.841h26.989c1.227,0,1.84.613,1.84,1.841v6.185c0,1.227-.613,1.84-1.84,1.84h-7.515v25.099c0,1.227-.613,1.84-1.84,1.84Z" style="fill: #363636;"></path>
+        <path d="M569.526,77.4c-1.227,0-1.84-.613-1.84-1.84v-6.083c0-1.227.613-1.84,1.84-1.84h5.061v-17.176h-5.061c-1.227,0-1.84-.613-1.84-1.84v-6.185c0-1.228.613-1.841,1.84-1.841h21.775c1.228,0,1.841.613,1.841,1.841v6.185c0,1.227-.613,1.84-1.841,1.84h-4.958v17.176h4.958c1.228,0,1.841.613,1.841,1.84v6.083c0,1.227-.613,1.84-1.841,1.84h-21.775Z" style="fill: #363636;"></path>
+        <path d="M608.936,77.4h-7.667c-1.227,0-1.84-.613-1.84-1.84v-33.123c0-1.228.613-1.841,1.84-1.841h5.316c1.227,0,2.231.46,3.016,1.381l9.916,11.348v-10.888c0-1.228.613-1.841,1.841-1.841h7.667c1.227,0,1.84.613,1.84,1.841v33.123c0,1.227-.613,1.84-1.84,1.84h-7.667c-1.228,0-1.841-.613-1.841-1.84v-6.287l-8.74-10.581v16.868c0,1.227-.613,1.84-1.841,1.84Z" style="fill: #363636;"></path>
+        <path d="M666.031,77.4h-16.102c-4.294,0-7.463-.852-9.508-2.556-2.044-1.704-3.066-4.327-3.066-7.872v-15.948c0-3.544,1.022-6.167,3.066-7.872,2.045-1.703,5.214-2.556,9.508-2.556h12.779c1.227,0,1.84.613,1.84,1.841v6.185c0,1.227-.613,1.84-1.84,1.84h-10.632c-2.079,0-3.118.853-3.118,2.557v12.216c0,1.671.783,2.505,2.351,2.505h4.959v-7.974c0-1.227.613-1.841,1.84-1.841h7.923c1.227,0,1.84.614,1.84,1.841v15.795c0,1.227-.613,1.84-1.84,1.84Z" style="fill: #363636;"></path>
+      </symbol>
+<symbol id="word-esc" viewBox="110.97799682617188 43.95800018310547 92.97998046875 36.80500793457031">
+        <path d="M136.536,80.762h-23.718c-1.227,0-1.84-.613-1.84-1.84v-33.123c0-1.228.614-1.841,1.84-1.841h23.718c1.227,0,1.84.613,1.84,1.841v5.98c0,1.227-.614,1.84-1.84,1.84h-14.108v3.936h9.967c1.227,0,1.84.614,1.84,1.841v5.469c0,1.228-.613,1.841-1.84,1.841h-9.967v4.396h14.108c1.227,0,1.84.613,1.84,1.841v5.98c0,1.227-.614,1.84-1.84,1.84Z" style="fill: #363636;"></path>
+        <path d="M161.48,80.762h-16.152c-1.227,0-1.84-.613-1.84-1.84v-5.98c0-1.228.613-1.841,1.84-1.841h13.75c.442,0,.775-.145.997-.435.221-.289.333-.639.333-1.048,0-.579-.111-1.005-.333-1.277-.222-.272-.554-.426-.997-.46l-7.667-1.074c-2.386-.374-4.302-1.166-5.75-2.376-1.449-1.21-2.172-3.246-2.172-6.108v-5.367c0-2.931.937-5.163,2.812-6.696,1.874-1.534,4.464-2.301,7.77-2.301h14.312c1.227,0,1.84.613,1.84,1.841v6.082c0,1.228-.613,1.841-1.84,1.841h-11.91c-.92,0-1.38.511-1.38,1.533,0,.989.46,1.533,1.38,1.636l7.616,1.022c1.602.238,2.999.656,4.191,1.252,1.192.597,2.122,1.475,2.786,2.633.665,1.159.997,2.692.997,4.601v5.367c0,2.896-.938,5.12-2.812,6.67-1.875,1.552-4.464,2.326-7.77,2.326Z" style="fill: #363636;"></path>
+        <path d="M202.118,80.762h-12.473c-4.293,0-7.463-.852-9.507-2.556-2.045-1.704-3.067-4.327-3.067-7.872v-15.896c0-3.578,1.022-6.219,3.067-7.924,2.044-1.703,5.214-2.556,9.507-2.556h12.473c1.227,0,1.84.613,1.84,1.841v6.185c0,1.227-.613,1.84-1.84,1.84h-10.275c-2.079,0-3.118.853-3.118,2.557v12.165c0,1.636,1.039,2.454,3.118,2.454h10.275c1.227,0,1.84.613,1.84,1.84v6.083c0,1.227-.613,1.84-1.84,1.84Z" style="fill: #363636;"></path>
+      </symbol>
+<symbol id="sticker-todo" viewBox="0 0 242.355 221.305">
+  <g>
+    <rect x="14.523" y="22.117" width="213.31" height="177.071" rx="48.853" ry="48.853" transform="translate(-31.342 50.106) rotate(-20.749)" style="fill: #fff1de;"/>
+    <path d="M81.241,221.295c-21.422,0-41.642-13.07-49.67-34.26L3.453,112.816c-5.021-13.252-4.579-27.666,1.241-40.586s16.324-22.801,29.576-27.821L142.377,3.454c13.254-5.021,27.667-4.579,40.586,1.241,12.92,5.82,22.801,16.324,27.821,29.576l28.116,74.218c10.363,27.355-3.461,58.043-30.816,68.407l-108.106,40.955c-6.166,2.336-12.504,3.443-18.737,3.443ZM161.192,8.389c-5.342,0-10.693.971-15.838,2.92L37.247,52.264c-11.154,4.226-19.995,12.542-24.895,23.417-4.898,10.875-5.27,23.006-1.044,34.16l28.117,74.218c8.723,23.026,34.557,34.658,57.575,25.938l108.106-40.955c23.025-8.723,34.66-34.552,25.938-57.576l-28.116-74.218c-4.226-11.154-12.541-19.994-23.416-24.894-5.858-2.639-12.083-3.964-18.321-3.964Z" style="fill: #212019;"/>
+  </g>
+  <g>
+    <path d="M81.546,122.824c-8.809,3.388-13.215,5.088-22.003,8.521-3.255,1.271-5.318.77-6.184-1.539-6.085-16.248-10.906-32.496-14.393-49.479-7.25,3.683-10.779,5.682-17.392,10.197-2.699,1.843-4.098,1.635-4.195-.783-.196-4.875-.163-7.331.263-12.244.211-2.436,1.471-4.76,3.788-6.772,18.566-14.02,38.363-22.111,60.167-29.942,2.795-.994,4.572-.216,5.394,2.281,1.658,5.035,2.484,7.5,4.145,12.377.823,2.419-.267,4.152-3.323,5.235-7.488,2.654-11.332,3.982-18.969,6.84,4.74,16.861,10.265,33.332,16.249,49.792.895,2.422-.283,4.262-3.546,5.517Z" style="fill: #212019;"/>
+    <path d="M207.825,56.647c1.166,2.685,1.545,5.279,1.175,7.852-.37,2.572-1.836,5.166-4.392,7.865-2.559,2.7-6.514,5.547-11.912,8.56-5.401,3.014-12.608,6.256-21.635,9.656-9.028,3.401-16.627,5.723-22.765,6.918-6.139,1.196-11.135,1.461-15.016.834-3.883-.628-6.937-1.966-9.186-3.98-2.251-2.014-3.947-4.533-5.112-7.544-4.284-11.08-8.626-22.137-13.069-33.153-1.213-3.005-1.748-5.987-1.639-8.923.109-2.935,1.129-5.859,3.102-8.753,1.971-2.893,5.187-5.824,9.813-8.731,4.624-2.907,11.028-5.845,19.388-8.354,8.358-2.508,15.64-3.59,21.752-3.701,6.109-.11,11.308.581,15.588,1.716,4.277,1.135,7.871,2.655,10.72,4.488,2.848,1.833,5.218,3.924,7.029,6.352,6.381,9.575,11.289,18.48,16.158,28.899ZM149.611,71.321c.536,1.308,1.704,2.139,3.513,2.498,1.809.358,5.329-.419,10.58-2.273,5.347-1.887,8.554-3.472,9.608-4.82,1.053-1.347,1.318-2.658.781-3.946-3.523-8.655-7.578-17.335-12.145-25.49-.683-1.23-1.954-2.041-3.785-2.429-1.832-.389-5.362.181-10.551,1.905-5.095,1.694-8.098,3.281-9.08,4.612-.981,1.332-1.157,2.64-.53,3.914,4.204,8.491,8.059,17.246,11.607,26.03Z" style="fill: #212019;"/>
+    <path d="M116.847,198.689c-14.192,5.199-27.235,8.768-42.295,10.285-3.069.093-5.547-.806-7.305-2.502-14.845-16.256-24.119-33.581-32.461-53.889-.812-2.073.442-3.673,3.724-4.841,15.4-5.498,30.744-11.149,46.057-16.885,11.463-4.285,20.568-5.778,27.301-4.519s11.381,5.254,13.957,11.723c3.821,9.606,7.719,19.184,11.66,28.741,2.667,6.486,2.335,12.47-.886,17.728-3.221,5.26-9.528,10.133-19.752,14.159ZM71.9,156.636c4.539,10.86,9.666,21.487,15.674,31.615,6.339-2.041,9.49-3.21,15.726-5.638,4.104-1.598,5.332-3.951,3.814-6.973-4.515-8.992-6.541-13.473-10.469-22.663-1.293-3.026-4.062-3.748-8.361-2.168-6.531,2.401-9.811,3.583-16.385,5.827Z" style="fill: #212019;"/>
+    <path d="M227.707,129.569c.159,3.044-.301,6.195-1.27,9.458-.969,3.263-2.68,6.77-5.127,10.399-2.448,3.631-5.842,7.472-10.389,11.195-4.548,3.725-10.544,7.394-18.215,10.622-7.673,3.229-14.201,4.942-19.438,5.643-5.239.701-9.495.53-12.831-.382-3.338-.912-6.009-2.417-8.014-4.492-2.006-2.075-3.563-4.569-4.631-7.495-3.919-10.613-7.898-21.198-11.916-31.774-1.1-2.887-1.483-5.791-1.121-8.708.361-2.916,1.763-5.89,4.255-8.903,2.49-3.012,6.392-6.128,11.757-9.344,5.363-3.215,12.569-6.557,21.565-10.03,8.994-3.473,16.535-5.834,22.577-7.138,6.039-1.303,10.88-1.784,14.561-1.454,3.679.33,6.461,1.31,8.385,3.007,1.924,1.697,3.282,3.913,4.084,6.723,2.812,11.156,4.621,21.219,5.767,32.672ZM176.836,150.464c.352,1.334,1.322,2.208,2.9,2.621,1.578.412,4.795-.256,9.611-2.167,4.905-1.946,7.86-3.75,8.96-5.234,1.099-1.482,1.526-2.917,1.257-4.281-2.166-10.999-3.649-16.326-6.982-26.879-.413-1.307-1.439-2.097-3.076-2.376-1.639-.28-5.052.658-10.267,2.751-5.121,2.056-8.26,3.758-9.394,5.158-1.133,1.401-1.476,2.744-1.036,4.04,3.551,10.456,5.184,15.61,8.026,26.367Z" style="fill: #212019;"/>
+  </g>
+</symbol>
+<symbol id="sticker-inprog" viewBox="0 0 336.605 232.466">
+  <defs>
+    <clipPath id="inprog-clippath">
+      <path d="M186.262,80.335c-58.841,4.073-103.12,42.621-104.062,103.262.369,11.721-7.149,23.109-18.609,26.383-10.085,2.35-15.128,3.526-25.213,5.876-18.29,2.563-25.113-17.102-27.816-31.072C9.304,83.575,89.888,13.406,187.831,8.877c13.908.288,28.466,9.311,26.166,24.813-2.075,10.263-3.112,15.394-5.187,25.657-2.429,10.639-11.184,20.363-22.548,20.987Z" style="fill: #49ab30;"/>
+    </clipPath>
+  </defs>
+  <path d="M255.88,120.854c-59.289-64.977-166.013-23.576-166.079,64.311,1.334,14.445-9.368,29.466-22.277,34.781-10.617,3.466-15.925,5.199-26.541,8.665-22.315,6.81-36.696-23.357-37.998-40.446C-2.775,21.06,213.784-62.812,322.075,64.603c10.546,13.509,20.233,45.494-.849,55.489-10.182,4.588-15.273,6.882-25.455,11.47-13.235,6.053-30.881-.321-39.891-10.707Z" style="fill: #fff1de; stroke: #49ab30; stroke-miterlimit: 10; stroke-width: 5.743px;"/>
+  <g>
+    <path d="M228.841,64.407c-.777,2.038-1.774,3.78-2.955,5.247-1.181,1.468-2.676,2.564-4.457,3.335-1.782.771-3.96,1.132-6.552,1.167-2.593.036-5.725-.336-9.487-.956-3.761-.62-6.82-1.273-9.213-2.138-2.394-.866-4.271-1.91-5.625-3.211-1.355-1.302-2.327-2.818-2.885-4.575-.558-1.757-.834-3.714-.784-5.873.22-9.603.33-14.404.55-24.007.049-2.158.48-4.124,1.331-5.885.849-1.759,2.292-3.275,4.352-4.494,2.058-1.218,4.931-2.106,8.603-2.534,3.67-.428,8.345-.313,13.91.604,5.564.918,10.016,2.312,13.322,3.903,3.304,1.59,5.688,3.363,7.177,5.185,1.488,1.821,2.267,3.715,2.375,5.638.107,1.923-.247,3.903-1.023,5.939-3.456,9.062-5.184,13.594-8.64,22.656ZM202.834,55.703c-.139.934.092,1.753.676,2.466.583.713,2.089,1.218,4.516,1.618,2.472.408,4.091.422,4.892-.064.799-.486,1.317-1.181,1.542-2.101,1.814-7.411,2.722-11.116,4.536-18.527.225-.918.028-1.761-.606-2.518-.635-.758-2.441-1.451-5.422-1.943-2.926-.483-4.862-.409-5.768.094-.909.505-1.424,1.229-1.562,2.161-1.121,7.525-1.682,11.288-2.803,18.813Z" style="fill: #49ab30;"/>
+    <path d="M260.312,100.034c-6.007-5.985-9.235-8.564-15.975-12.958-4.494-2.93-7.361-5.736-8.623-9.003-1.262-3.267-1-7.125,1.05-11.614,3.69-8.078,5.535-12.117,9.225-20.196,2.05-4.488,5.128-7.152,9.389-7.697,4.257-.545,9.905,1.017,16.448,5.283,7.787,5.077,11.548,7.967,18.682,14.495,1.713,1.568,1.981,3.022.843,4.287-2.295,2.55-3.442,3.825-5.736,6.376-1.138,1.265-2.474,1.144-4.043-.292-5.437-4.976-8.278-7.227-14.137-11.28-2.865-1.981-4.962-1.866-6.213.149-3.588,5.779-5.382,8.669-8.97,14.448-1.227,1.975-.91,3.532.913,4.767,2.305,1.561,3.44,2.382,5.672,4.11,2.639-3.564,3.959-5.345,6.598-8.909,1.015-1.37,2.294-1.474,3.806-.246,3.904,3.172,5.803,4.876,9.472,8.531,1.421,1.416,1.52,2.764.335,3.982-6.102,6.271-9.153,9.406-15.255,15.677-1.185,1.217-2.335,1.231-3.479.09Z" style="fill: #49ab30;"/>
+    <path d="M276.841,121.234c-3.109-5.142-4.779-7.534-8.304-11.978-1.048-1.32-.956-2.519.304-3.652,4.263-3.835,6.394-5.753,10.656-9.588,1.26-1.133,2.522-.959,3.752.591,4.139,5.217,6.1,8.026,9.75,14.063,1.085,1.794.891,3.168-.54,4.054-4.841,3-7.262,4.5-12.103,7.499-1.431.887-2.591.538-3.515-.99Z" style="fill: #49ab30;"/>
+  </g>
+  <g>
+    <path d="M186.262,80.335c-58.841,4.073-103.12,42.621-104.062,103.262.369,11.721-7.149,23.109-18.609,26.383-10.085,2.35-15.128,3.526-25.213,5.876-18.29,2.563-25.113-17.102-27.816-31.072C9.304,83.575,89.888,13.406,187.831,8.877c13.908.288,28.466,9.311,26.166,24.813-2.075,10.263-3.112,15.394-5.187,25.657-2.429,10.639-11.184,20.363-22.548,20.987Z" style="fill: #49ab30;"/>
+    <g style="clip-path: url(#inprog-clippath);">
+      <g>
+        <path d="M73.602,194.024c.257,1.726-.42,2.71-2.091,2.934-3.315.443-4.973.665-8.288,1.108-1.671.224-2.686-.642-2.974-2.577-.475-3.191-.658-4.771-.925-7.898-9.466.431-14.199.647-23.665,1.078.317,3.72.536,5.6,1.101,9.397.342,2.302-.28,3.577-1.952,3.8-3.371.451-5.056.676-8.427,1.127-1.671.224-2.74-.935-3.114-3.447-1.608-14.322-2.405-28.211-.581-42.575.291-2.277,1.315-3.253,2.994-2.958,3.386.596,5.079.895,8.464,1.491,1.68.296,2.35,1.473,2.083,3.56-.431,3.375-.596,5.085-.816,8.544,9.482.912,14.223,1.369,23.705,2.281.185-2.907.323-4.344.686-7.181.224-1.754,1.206-2.471,2.885-2.175,3.33.587,4.995.88,8.325,1.467,1.679.296,2.392,1.216,2.192,2.78-1.322,9.359-1.137,19.934.399,29.245Z" style="fill: #fff1de;"/>
+        <path d="M78.423,143.328c-1.297,3.541-1.867,5.354-2.831,9.063-.386,1.484-1.382,2.029-3.038,1.614-14.904-3.731-29.808-7.462-44.712-11.192-1.656-.414-2.24-1.717-1.678-3.877.974-3.743,1.521-5.586,2.73-9.213.697-2.091,1.918-3.574,3.606-4.423,8.386-4.348,12.673-6.088,21.204-8.788-5.415-2.717-8.122-4.076-13.537-6.793-1.525-.765-1.797-2.114-.756-4.006,2.605-4.733,4.014-7.033,7.021-11.489,1.202-1.781,2.539-2.181,3.956-1.238,12.753,8.485,25.506,16.971,38.258,25.456,1.417.943,1.693,2.013.868,3.236-2.065,3.061-3.033,4.641-4.822,7.892-.715,1.299-1.815,1.58-3.341.815l-7.817-3.923c-7.42,1.494-11.171,2.546-18.593,5.326,8.758,3.401,13.137,5.101,21.896,8.501,1.592.618,2.106,1.623,1.588,3.039Z" style="fill: #fff1de;"/>
+        <path d="M114.39,95.541c-3.037,2.308-4.509,3.523-7.343,6.069-1.097.986-2.229.895-3.423-.302-10.75-10.776-21.5-21.553-32.25-32.329-1.194-1.197-1.014-2.537.583-3.972,8.143-7.316,12.543-10.653,21.777-16.596,4.575-2.945,8.601-4.569,11.842-5.036,3.24-.467,5.885-.008,7.902,1.277,2.018,1.286,3.603,3.163,4.81,5.581,1.599,3.203,2.399,4.805,3.998,8.008,1.208,2.42,1.786,4.78,1.807,7.062.021,2.283-.782,4.476-2.344,6.63-1.563,2.156-4.131,4.268-7.676,6.549-2.689,1.731-4.008,2.635-6.587,4.52l7.132,9.216c1.031,1.332.947,2.428-.229,3.322ZM93.134,64.724c2.599,3.351,3.898,5.026,6.497,8.376,2.22-1.626,3.35-2.414,5.646-3.936,1.232-.817,1.852-1.626,1.854-2.458s-.235-1.618-.725-2.36c-.818-1.24-1.228-1.859-2.046-3.099-.514-.779-1.165-1.323-1.956-1.622s-1.863-.021-3.19.859c-2.472,1.64-3.689,2.488-6.081,4.239Z" style="fill: #fff1de;"/>
+        <path d="M151.537,76.359c-3.627,1.147-5.42,1.792-8.949,3.214-1.375.554-2.385.078-3.046-1.464-5.948-13.878-11.896-27.756-17.844-41.634-.661-1.542-.003-2.743,1.999-3.549,9.078-3.751,18.949-6.808,28.559-8.838,4.386-.966,7.953-1.082,10.6-.507,2.647.576,4.567,1.708,5.771,3.323,1.204,1.616,1.885,3.599,2.093,5.929.115,1.286.172,1.929.287,3.216.175,1.958,0,3.649-.493,5.076-.494,1.427-1.52,2.568-3.066,3.454,2.824-.129,5.165.647,6.937,2.257,1.771,1.61,2.688,3.915,2.845,6.861.316,5.949.473,8.924.789,14.873.089,1.684-.603,2.579-2.073,2.728-3.796.384-5.69.654-9.449,1.341-1.456.266-2.33-.408-2.63-2.062-.764-4.217-1.146-6.326-1.909-10.544-.191-1.056-.522-1.777-.997-2.155-.475-.377-1.201-.466-2.168-.252-3.868.858-5.789,1.356-9.59,2.484,1.507,5.271,2.261,7.907,3.768,13.178.461,1.613-.02,2.625-1.434,3.072ZM143.282,39.4c.984,3.443,1.477,5.164,2.461,8.606,2.239-.664,3.364-.976,5.625-1.555,1.307-.335,2.118-.851,2.44-1.575.322-.724.39-1.541.194-2.454-.2-.931-.301-1.396-.501-2.327-.196-.912-.599-1.621-1.215-2.122-.616-.5-1.626-.584-3.016-.228-2.406.617-3.604.948-5.987,1.655Z" style="fill: #fff1de;"/>
+        <path d="M226.143,63.466c-.73,2.054-1.687,3.819-2.833,5.313-1.146,1.495-2.615,2.628-4.377,3.441-1.762.814-3.931,1.229-6.519,1.327-2.59.099-5.729-.197-9.502-.728s-6.847-1.113-9.259-1.923c-2.413-.811-4.314-1.811-5.698-3.081-1.385-1.27-2.392-2.764-2.989-4.507-.598-1.743-.918-3.692-.918-5.85.001-9.598.002-14.397.003-23.996,0-2.157.386-4.13,1.197-5.909.809-1.776,2.218-3.322,4.25-4.586,2.031-1.263,4.883-2.214,8.545-2.725,3.66-.511,8.337-.504,13.919.282s10.063,2.071,13.402,3.579c3.337,1.508,5.759,3.219,7.288,5.001,1.527,1.781,2.349,3.652,2.499,5.569.151,1.917-.159,3.902-.888,5.955-3.248,9.135-4.872,13.702-8.12,22.837ZM199.958,55.403c-.118.936.132,1.749.731,2.448.599.699,2.117,1.168,4.551,1.511,2.48.349,4.099.325,4.888-.18.787-.504,1.29-1.212,1.494-2.135,1.645-7.445,2.468-11.168,4.113-18.613.204-.922-.012-1.759-.663-2.501-.652-.742-2.473-1.391-5.464-1.812-2.936-.413-4.869-.295-5.764.229-.897.525-1.395,1.261-1.513,2.195-.95,7.543-1.425,11.315-2.374,18.858Z" style="fill: #fff1de;"/>
+      </g>
+    </g>
+  </g>
+</symbol>
+<symbol id="sticker-done" viewBox="0 0 297.798 208.464">
+  <ellipse cx="148.899" cy="104.232" rx="155.15" ry="94.608" transform="translate(-27.326 59.735) rotate(-20.822)" style="fill: #fff1de;"/>
+  <path d="M286.338,51.964c1.172,3.081-12.178,10.044-11.656,13.262.519,3.204,15.39,5.505,15.292,8.811-.095,3.208-15.095,4.797-15.746,8.07-.623,3.13,12.715,10.166,11.606,13.328-1.054,3.007-15.922.334-17.396,3.346-1.402,2.864,9.917,12.861,8.152,15.709-1.682,2.714-15.722-2.883-17.72-.201-1.912,2.566,7.532,14.363,5.344,16.884-2.101,2.421-15.146-5.219-17.491-2.853-2.261,2.281,5.534,15.233,3.056,17.451-2.397,2.146-14.433-7.005-17.024-4.93-2.515,2.015,3.811,15.746,1.121,17.684-2.618,1.886-13.656-8.447-16.432-6.643-2.709,1.761,2.271,16.037-.581,17.711-2.789,1.638-12.839-9.659-15.759-8.113-2.86,1.515.851,16.173-2.128,17.594-2.925,1.395-11.984-10.712-15.018-9.416-2.982,1.274-.491,16.189-3.573,17.361s-11.13-11.629-14.205-10.6c-3.128,1.047-1.852,16.114-4.963,17.015-3.171.918-10.138-12.502-13.282-11.733-3.21.785-3.213,15.905-6.386,16.535-3.244.644-9.011-13.333-12.205-12.849-3.274.496-4.656,15.553-7.866,15.883-3.298.339-7.695-14.126-10.914-13.96-3.316.171-6.23,15.007-9.448,14.996-3.326-.011-6.106-14.869-9.312-15.072-3.325-.21-7.998,14.168-11.177,13.755-3.311-.43-4.094-15.522-7.229-16.17-3.275-.677-10.048,12.835-13.108,11.925-3.212-.955-1.395-15.947-4.346-17.156-3.103-1.271-12.438,10.605-15.224,9.058-2.93-1.627,2.363-15.747-.182-17.673-2.661-2.014-14.928,6.765-17.13,4.431-2.269-2.405,7.316-14.005,5.576-16.743-1.748-2.751-16.351.917-17.522-2.163-1.172-3.081,12.178-10.044,11.656-13.262-.519-3.204-15.39-5.505-15.292-8.811.095-3.208,15.095-4.797,15.746-8.07.623-3.13-12.715-10.166-11.606-13.328,1.054-3.007,15.922-.334,17.396-3.346,1.402-2.864-9.917-12.861-8.152-15.709,1.682-2.714,15.722,2.883,17.72.201,1.912-2.566-7.532-14.363-5.344-16.884,2.101-2.421,15.146,5.219,17.491,2.853,2.261-2.281-5.534-15.233-3.056-17.451,2.397-2.146,14.433,7.005,17.024,4.93,2.515-2.015-3.811-15.746-1.121-17.684,2.618-1.886,13.656,8.447,16.432,6.643,2.709-1.761-2.271-16.037.581-17.711,2.789-1.638,12.839,9.659,15.759,8.113,2.86-1.515-.851-16.173,2.128-17.594,2.925-1.395,11.984,10.712,15.018,9.416,2.982-1.274.491-16.189,3.573-17.361s11.13,11.629,14.205,10.6c3.128-1.047,1.852-16.114,4.963-17.015,3.171-.918,10.138,12.502,13.282,11.733,3.21-.785,3.213-15.905,6.386-16.535,3.244-.644,9.011,13.333,12.205,12.849,3.274-.496,4.656-15.553,7.866-15.883,3.298-.339,7.695,14.126,10.914,13.96,3.316-.171,6.23-15.007,9.448-14.996,3.326.011,6.106,14.869,9.312,15.072,3.325.21,7.998-14.168,11.177-13.755,3.311.43,4.094,15.522,7.229,16.17,3.275.677,10.048-12.835,13.108-11.925,3.212.955,1.395,15.947,4.346,17.156,3.103,1.271,12.438-10.605,15.224-9.058,2.93,1.627-2.363,15.747.182,17.673,2.661,2.014,14.928-6.765,17.13-4.431,2.269,2.405-7.316,14.005-5.576,16.743,1.748,2.751,16.351-.917,17.522,2.163Z" style="fill: #235ae6;"/>
+  <g>
+    <path d="M90.224,148.288l-18.269,6.947c-1.301.495-2.199.092-2.694-1.209l-13.359-35.129c-.495-1.302-.091-2.199,1.21-2.694l18.269-6.947c4.554-1.732,8.259-2.106,11.114-1.125,2.856.983,4.999,3.354,6.429,7.112l6.433,16.914c1.429,3.759,1.402,6.954-.079,9.585-1.481,2.633-4.498,4.813-9.053,6.546ZM71.404,122.62l7.009,18.432,6.452-2.453c1.698-.646,2.211-1.854,1.537-3.625l-5.01-13.174c-.659-1.734-1.839-2.279-3.537-1.633l-6.451,2.453Z" style="fill: #fff1de;"/>
+    <path d="M139.618,117.775c.633,1.664.963,3.265.989,4.806.028,1.541-.387,3.033-1.245,4.476-.857,1.443-2.279,2.843-4.267,4.198s-4.681,2.68-8.077,3.972c-3.397,1.292-6.289,2.091-8.674,2.399-2.388.308-4.38.207-5.979-.302s-2.911-1.345-3.932-2.507c-1.022-1.163-1.848-2.575-2.48-4.238l-7.03-18.486c-.632-1.662-.954-3.268-.963-4.815-.01-1.548.415-3.044,1.272-4.486.857-1.443,2.276-2.851,4.258-4.225,1.979-1.374,4.668-2.707,8.066-3.999,3.396-1.292,6.292-2.083,8.685-2.372s4.389-.18,5.988.328c1.6.509,2.902,1.348,3.905,2.518,1.003,1.169,1.821,2.586,2.454,4.248l7.029,18.486ZM117.517,123.947c.274.723.775,1.226,1.504,1.507.728.281,2.067.051,4.019-.691,1.987-.756,3.15-1.477,3.488-2.164.339-.687.372-1.393.097-2.115l-5.546-14.583c-.274-.723-.765-1.22-1.468-1.49-.702-.27-2.048-.027-4.035.729-1.951.742-3.108,1.451-3.472,2.127-.364.676-.408,1.376-.133,2.098l5.546,14.583Z" style="fill: #fff1de;"/>
+    <path d="M160.483,121.568l-8.132,3.093c-1.301.495-2.199.092-2.693-1.209l-13.36-35.129c-.494-1.302-.091-2.199,1.21-2.694l5.638-2.144c1.301-.495,2.553-.413,3.755.247l15.095,8.035-4.392-11.546c-.495-1.302-.091-2.199,1.21-2.694l8.132-3.092c1.3-.495,2.198-.092,2.693,1.209l13.359,35.129c.495,1.3.092,2.199-1.209,2.693l-8.132,3.093c-1.301.495-2.199.092-2.694-1.209l-2.536-6.668-13.537-7.696,6.804,17.89c.494,1.3.091,2.198-1.21,2.692Z" style="fill: #fff1de;"/>
+    <path d="M218.327,99.571l-25.154,9.566c-1.301.495-2.199.091-2.694-1.209l-13.359-35.129c-.495-1.302-.091-2.199,1.21-2.694l25.154-9.566c1.301-.495,2.198-.092,2.693,1.209l2.412,6.343c.494,1.301.092,2.199-1.209,2.694l-14.963,5.69,1.588,4.174,10.57-4.02c1.302-.495,2.199-.091,2.693,1.209l2.207,5.801c.494,1.301.092,2.199-1.21,2.694l-10.571,4.02,1.773,4.662,14.963-5.69c1.301-.495,2.199-.091,2.693,1.209l2.412,6.343c.495,1.3.092,2.198-1.209,2.693Z" style="fill: #fff1de;"/>
+    <path d="M233.2,77.657l-8.402,3.195c-1.302.495-2.218.1-2.749-1.188l-8.771-20.616c-.531-1.288-.164-2.171,1.101-2.652l10.354-3.938c1.266-.481,2.127-.065,2.586,1.25l7.198,21.214c.459,1.315.02,2.227-1.317,2.735ZM239.414,91.552l-9.975,3.793c-1.301.495-2.199.091-2.694-1.209l-2.7-7.102c-.495-1.302-.092-2.2,1.209-2.694l9.975-3.794c1.302-.495,2.199-.091,2.694,1.211l2.7,7.102c.495,1.3.093,2.198-1.209,2.693Z" style="fill: #fff1de;"/>
+  </g>
+  <path d="M68.272,104.232s-6.108-4.101-14.159-4.725c-7.623-.591-8.125-5.773-7.617-7.678.534-2.002,3.122-4.94,9.282-3.959,7.504,1.194,12.844,13.729,12.494,16.362Z" style="fill: #fff1de;"/>
+  <path d="M57.322,107.77s-6.957,2.392-12.317,8.431c-5.075,5.719-9.508,2.99-10.72,1.434-1.273-1.635-2.052-5.471,2.45-9.789,5.484-5.26,18.7-1.945,20.586-.077Z" style="fill: #fff1de;"/>
+  <path d="M236.835,125.604c-1.523,0-3.039-.629-4.126-1.861-2.01-2.278-1.792-5.754.485-7.763.289-.256,28.824-25.822,22.511-54.303-.657-2.966,1.214-5.903,4.18-6.56,2.974-.659,5.902,1.215,6.561,4.179,7.702,34.747-24.595,63.716-25.974,64.932-1.046.923-2.344,1.376-3.637,1.376Z" style="fill: #fff1de;"/>
+</symbol>
+<symbol id="sticker-stopped" viewBox="0 0 317.106 219.176">
+  <g>
+    <path d="M308.604,88.612c-3.964-16.71-15.858-66.841-15.858-66.841-1.259-5.306-5.852-9.155-11.296-9.467l-139.119-7.957c-2.398-.137-4.784.429-6.865,1.629L14.748,75.578c-4.724,2.724-7.099,8.226-5.84,13.532l15.858,66.841c1.259,5.306,5.852,9.155,11.296,9.467l139.119,7.957c2.398.137,4.784-.429,6.865-1.629,0,0,90.538-52.202,120.718-69.603,4.724-2.724,7.099-8.226,5.84-13.532Z" style="fill: #e30000;"/>
+    <path d="M175.892,177.723c-.318,0-.637-.01-.956-.027l-139.12-7.958c-7.297-.418-13.572-5.676-15.259-12.788L4.699,90.109c-1.687-7.112,1.557-14.628,7.889-18.279L133.305,2.228c2.817-1.625,6.024-2.391,9.273-2.2l139.119,7.958c7.297.417,13.571,5.675,15.258,12.787l15.858,66.842c1.688,7.111-1.557,14.627-7.888,18.278l-120.718,69.604c-2.542,1.465-5.399,2.228-8.316,2.228ZM141.623,8.652c-1.403,0-2.775.367-3.996,1.071L16.909,79.326c-3.043,1.755-4.602,5.368-3.791,8.786l15.858,66.84c.811,3.419,3.827,5.946,7.334,6.146l139.119,7.958c1.565.09,3.104-.277,4.458-1.058l120.717-69.603c3.043-1.755,4.603-5.368,3.792-8.786l-15.858-66.842c-.812-3.418-3.827-5.945-7.334-6.146l-139.119-7.958c-.154-.009-.308-.013-.461-.013Z" style="fill: #ffefdb;"/>
+  </g>
+  <g>
+    <rect x="26.575" y="56.484" width="264.363" height="64.754" rx="8.941" ry="8.941" transform="translate(-16.225 39.047) rotate(-13.347)" style="fill: #deccb6;"/>
+    <g>
+      <path d="M59.917,139.953l-16.841,3.995c-1.279.304-2.149-.516-2.61-2.458l-2.246-9.468c-.461-1.942-.052-3.065,1.228-3.368l14.337-3.401c.461-.109.753-.421.876-.935.122-.513.105-1.094-.048-1.741-.218-.916-.492-1.563-.826-1.941-.334-.376-.737-.536-1.212-.481l-8.397.197c-2.628-.003-4.924-.783-6.888-2.341-1.965-1.556-3.485-4.601-4.561-9.133l-2.016-8.497c-1.101-4.639-.962-8.405.416-11.296,1.378-2.892,3.79-4.747,7.237-5.564l14.923-3.54c1.278-.304,2.149.516,2.609,2.458l2.285,9.63c.461,1.942.051,3.065-1.228,3.369l-12.418,2.946c-.96.228-1.247,1.151-.862,2.77.371,1.565,1.055,2.313,2.053,2.248l8.324-.265c1.76-.018,3.373.297,4.842.946,1.467.649,2.765,1.81,3.893,3.478,1.128,1.67,2.051,4.017,2.768,7.037l2.016,8.497c1.088,4.586.945,8.338-.426,11.257-1.372,2.918-3.781,4.785-7.228,5.604Z" style="fill: #e30000;"/>
+      <path d="M94.345,131.784l-8.634,2.049c-1.279.304-2.149-.516-2.609-2.458l-9.427-39.734-7.835,1.858c-1.278.304-2.148-.516-2.609-2.458l-2.323-9.792c-.461-1.942-.052-3.065,1.228-3.369l28.14-6.676c1.279-.303,2.149.516,2.609,2.458l2.323,9.792c.461,1.942.052,3.065-1.227,3.369l-7.835,1.858,9.427,39.734c.46,1.942.052,3.065-1.228,3.368Z" style="fill: #e30000;"/>
+      <path d="M139.802,104.844c.589,2.482.883,4.791.884,6.928,0,2.137-.432,4.077-1.294,5.82s-2.275,3.262-4.239,4.553c-1.965,1.292-4.616,2.335-7.956,3.127-3.34.793-6.178,1.053-8.513.78-2.335-.271-4.279-.993-5.833-2.163s-2.819-2.707-3.796-4.612c-.979-1.905-1.761-4.099-2.35-6.58l-6.547-27.596c-.589-2.48-.875-4.793-.856-6.934.017-2.141.456-4.083,1.319-5.826.862-1.743,2.272-3.275,4.229-4.594,1.958-1.319,4.606-2.375,7.946-3.167s6.181-1.039,8.522-.74c2.341.3,4.289,1.035,5.843,2.205,1.553,1.17,2.81,2.709,3.771,4.619.959,1.909,1.733,4.105,2.322,6.587l6.547,27.595ZM118.113,106.913c.256,1.08.737,1.919,1.442,2.521.706.602,2.018.676,3.937.22,1.953-.463,3.102-1.121,3.445-1.971.342-.851.386-1.814.129-2.894l-5.164-21.769c-.256-1.078-.726-1.908-1.406-2.487-.682-.578-2-.636-3.954-.173-1.919.455-3.062,1.098-3.428,1.924-.366.828-.422,1.782-.166,2.86l5.165,21.769Z" style="fill: #e30000;"/>
+      <path d="M160.377,116.118l-8.26,1.96c-1.279.304-2.149-.516-2.61-2.458l-12.441-52.439c-.46-1.942-.051-3.065,1.229-3.369l16.308-3.869c3.233-.767,5.921-.707,8.065.181,2.144.889,3.869,2.43,5.179,4.626,1.31,2.198,2.336,4.861,3.078,7.989l2.458,10.358c.743,3.13,1.022,5.97.839,8.52-.183,2.552-1.032,4.705-2.549,6.46-1.517,1.756-3.891,3.018-7.124,3.785l-6.129,1.454,3.188,13.433c.46,1.942.052,3.065-1.229,3.368ZM151.958,72.556l2.898,12.219,4.797-1.138c1.03-.244,1.609-.809,1.737-1.694.127-.885.07-1.84-.174-2.865l-1.018-4.289c-.256-1.078-.637-1.971-1.142-2.678-.505-.706-1.273-.938-2.303-.693l-4.797,1.138Z" style="fill: #e30000;"/>
+      <path d="M196.726,107.495l-8.261,1.959c-1.279.304-2.148-.515-2.609-2.458l-12.441-52.439c-.461-1.942-.052-3.065,1.228-3.369l16.308-3.869c3.233-.767,5.922-.706,8.066.181,2.143.889,3.869,2.43,5.179,4.627,1.31,2.198,2.335,4.86,3.077,7.989l2.457,10.358c.743,3.13,1.022,5.97.84,8.52-.184,2.552-1.033,4.705-2.549,6.46-1.517,1.757-3.892,3.018-7.125,3.785l-6.128,1.454,3.187,13.433c.461,1.942.052,3.065-1.228,3.369ZM188.305,63.933l2.899,12.219,4.796-1.138c1.03-.245,1.609-.809,1.737-1.694s.07-1.84-.173-2.865l-1.018-4.289c-.256-1.078-.637-1.972-1.143-2.678-.505-.706-1.272-.938-2.303-.693l-4.797,1.138Z" style="fill: #e30000;"/>
+      <path d="M249.541,94.964l-24.729,5.867c-1.279.304-2.149-.516-2.609-2.458l-12.441-52.439c-.461-1.942-.052-3.065,1.228-3.369l24.729-5.867c1.279-.303,2.148.516,2.609,2.458l2.246,9.468c.461,1.942.052,3.065-1.228,3.368l-14.709,3.49,1.479,6.231,10.393-2.466c1.278-.303,2.149.516,2.609,2.458l2.055,8.659c.461,1.942.051,3.065-1.228,3.369l-10.393,2.466,1.651,6.959,14.709-3.49c1.279-.304,2.149.516,2.609,2.458l2.247,9.468c.46,1.942.052,3.065-1.228,3.368Z" style="fill: #e30000;"/>
+      <path d="M277.627,88.301l-17.96,4.261c-1.28.304-2.149-.515-2.61-2.458l-12.441-52.439c-.46-1.942-.052-3.065,1.229-3.369l17.96-4.261c4.477-1.062,8.101-.497,10.873,1.694,2.771,2.193,4.823,6.094,6.154,11.704l5.99,25.248c1.331,5.611,1.251,10.019-.241,13.221-1.492,3.204-4.477,5.336-8.953,6.398ZM259.689,47.338l6.528,27.515,6.342-1.505c1.669-.396,2.191-1.916,1.564-4.56l-4.666-19.665c-.614-2.589-1.757-3.686-3.427-3.29l-6.342,1.505Z" style="fill: #e30000;"/>
+    </g>
+  </g>
+  <g>
+    <path d="M61.373,134.022l-16.841,3.995c-1.279.304-2.149-.516-2.61-2.458l-2.246-9.468c-.461-1.942-.052-3.065,1.228-3.368l14.337-3.401c.461-.109.753-.421.876-.935.122-.513.105-1.094-.048-1.741-.218-.916-.492-1.563-.826-1.941-.334-.376-.737-.536-1.212-.481l-8.397.197c-2.628-.003-4.924-.783-6.888-2.341-1.965-1.556-3.485-4.601-4.561-9.133l-2.016-8.497c-1.101-4.64-.962-8.405.416-11.296,1.378-2.893,3.79-4.747,7.237-5.564l14.923-3.54c1.278-.304,2.149.516,2.609,2.458l2.285,9.63c.461,1.942.051,3.064-1.228,3.368l-12.418,2.946c-.96.228-1.247,1.151-.862,2.77.371,1.565,1.055,2.313,2.053,2.248l8.324-.266c1.76-.018,3.373.298,4.842.946,1.467.649,2.765,1.81,3.893,3.478,1.128,1.671,2.051,4.017,2.768,7.037l2.016,8.497c1.088,4.586.945,8.338-.426,11.257-1.372,2.918-3.781,4.785-7.228,5.604Z" style="fill: #ffefdb;"/>
+    <path d="M95.802,125.853l-8.634,2.049c-1.279.304-2.149-.516-2.609-2.458l-9.427-39.733-7.835,1.858c-1.278.304-2.148-.516-2.609-2.458l-2.323-9.792c-.461-1.942-.052-3.065,1.228-3.369l28.14-6.676c1.279-.304,2.149.516,2.609,2.458l2.323,9.792c.461,1.942.052,3.065-1.227,3.369l-7.835,1.858,9.427,39.733c.46,1.942.052,3.065-1.228,3.368Z" style="fill: #ffefdb;"/>
+    <path d="M141.259,98.913c.589,2.482.883,4.791.884,6.928,0,2.137-.432,4.077-1.294,5.82s-2.275,3.262-4.239,4.553c-1.965,1.292-4.616,2.335-7.956,3.127-3.34.793-6.178,1.053-8.513.78-2.335-.271-4.279-.993-5.833-2.163s-2.819-2.707-3.796-4.612c-.979-1.905-1.761-4.099-2.35-6.58l-6.547-27.596c-.589-2.48-.875-4.793-.856-6.935.017-2.141.456-4.083,1.319-5.826.862-1.743,2.272-3.274,4.229-4.594,1.958-1.319,4.606-2.375,7.946-3.168,3.34-.792,6.181-1.038,8.522-.739,2.341.3,4.289,1.034,5.843,2.204,1.553,1.171,2.81,2.71,3.771,4.619.959,1.909,1.733,4.105,2.322,6.587l6.547,27.595ZM119.569,100.982c.256,1.08.737,1.92,1.442,2.521.706.602,2.018.676,3.937.22,1.953-.463,3.102-1.12,3.445-1.971.342-.851.386-1.814.129-2.895l-5.164-21.769c-.256-1.078-.726-1.908-1.406-2.487-.682-.578-2-.637-3.954-.173-1.919.455-3.062,1.098-3.428,1.924-.366.828-.422,1.782-.166,2.86l5.165,21.769Z" style="fill: #ffefdb;"/>
+    <path d="M161.834,110.187l-8.26,1.96c-1.279.304-2.149-.516-2.61-2.458l-12.441-52.438c-.46-1.942-.051-3.065,1.229-3.369l16.308-3.869c3.233-.767,5.921-.706,8.065.182,2.144.889,3.869,2.43,5.179,4.626,1.31,2.198,2.336,4.861,3.078,7.989l2.457,10.358c.743,3.13,1.022,5.97.839,8.52-.183,2.552-1.032,4.705-2.549,6.46-1.517,1.757-3.891,3.018-7.124,3.785l-6.129,1.454,3.188,13.433c.46,1.942.052,3.065-1.229,3.368ZM153.414,66.625l2.898,12.219,4.797-1.138c1.03-.244,1.609-.809,1.737-1.694.127-.885.07-1.84-.174-2.865l-1.018-4.289c-.256-1.078-.637-1.972-1.142-2.678s-1.273-.938-2.303-.693l-4.797,1.139Z" style="fill: #ffefdb;"/>
+    <path d="M198.182,101.564l-8.261,1.96c-1.279.304-2.148-.516-2.609-2.458l-12.441-52.438c-.461-1.942-.052-3.065,1.228-3.369l16.308-3.869c3.233-.767,5.922-.706,8.066.181,2.143.889,3.869,2.431,5.179,4.627,1.31,2.198,2.335,4.86,3.077,7.989l2.457,10.357c.743,3.13,1.022,5.971.84,8.521-.184,2.552-1.033,4.704-2.549,6.46-1.517,1.757-3.892,3.018-7.125,3.785l-6.128,1.453,3.187,13.434c.461,1.942.052,3.064-1.228,3.368ZM189.761,58.001l2.899,12.22,4.796-1.138c1.03-.245,1.609-.81,1.737-1.694.128-.886.07-1.84-.173-2.865l-1.018-4.289c-.256-1.078-.637-1.972-1.143-2.678-.505-.706-1.272-.938-2.303-.693l-4.797,1.138Z" style="fill: #ffefdb;"/>
+    <path d="M250.997,89.033l-24.729,5.867c-1.279.304-2.149-.516-2.609-2.458l-12.441-52.439c-.461-1.942-.052-3.064,1.228-3.368l24.729-5.867c1.279-.304,2.148.516,2.609,2.458l2.246,9.469c.461,1.942.052,3.064-1.228,3.368l-14.709,3.49,1.479,6.23,10.393-2.466c1.278-.303,2.149.517,2.609,2.459l2.055,8.658c.461,1.942.051,3.065-1.228,3.369l-10.393,2.466,1.651,6.959,14.709-3.489c1.279-.304,2.149.516,2.609,2.457l2.247,9.469c.46,1.942.052,3.064-1.228,3.368Z" style="fill: #ffefdb;"/>
+    <path d="M279.083,82.37l-17.96,4.261c-1.28.304-2.149-.516-2.61-2.458l-12.441-52.438c-.46-1.942-.052-3.065,1.229-3.369l17.96-4.261c4.477-1.062,8.101-.497,10.873,1.694,2.771,2.193,4.823,6.094,6.154,11.704l5.99,25.248c1.331,5.611,1.251,10.019-.241,13.221-1.492,3.204-4.477,5.336-8.953,6.398ZM261.146,41.407l6.528,27.515,6.342-1.505c1.669-.396,2.191-1.916,1.564-4.561l-4.666-19.664c-.614-2.589-1.757-3.687-3.427-3.29l-6.342,1.505Z" style="fill: #ffefdb;"/>
+  </g>
+</symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6.5"/><path d="m15 15 5 5"/></symbol>
+  <symbol id="i-graph" viewBox="0 0 24 24"><rect x="2" y="8" width="6" height="8" rx="1.5"/><rect x="16" y="2" width="6" height="7" rx="1.5"/><rect x="16" y="15" width="6" height="7" rx="1.5"/><path d="M8 12h4V5h4m-4 7v7h4"/></symbol>
+  <symbol id="i-category" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="18" rx="1.5"/><rect x="14" y="3" width="7" height="12" rx="1.5"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><path d="M4 8v12h16V8M3 3h18v5H3zM9 12h6"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="ghost-mark" viewBox="0 0 36 38"><path d="M17 2Q18 0 20 3L33 24Q35 28 31 27L7 22Q3 21 6 18Z"/><path d="M5 26Q3 24 3 28L2 35Q2 38 5 36L17 31Q20 29 16 28Z"/><path d="M26 31Q25 29 24 32L23 36Q23 38 26 37L32 36Q34 35 31 34Z"/></symbol>
+</defs></svg>
+<main class="study">
+  <div class="study-heading"><span>DESKGHOST / INTERACTION STUDY 02</span><span>顶部栏 · 选项栏 · 设置</span></div>
+  <div id="workspace-shell">
+    <header class="bar topbar">
+      <div class="brand"><svg aria-hidden="true"><use href="#ghost-mark"/></svg><div><b>DeskGhost</b><small>给想法一个落脚点</small></div></div>
+      <span class="divider" aria-hidden="true"></span>
+      <button id="workspace-toggle" class="key workspace-key" aria-haspopup="menu" aria-expanded="false" aria-controls="workspace-menu"><span class="well"><span class="plunger"><span class="cap"><span id="workspace-name">桌宠设计</span><svg class="icon" aria-hidden="true"><use href="#i-down"/></svg></span></span></span></button>
+      <span class="top-spacer"></span>
+      <div class="top-actions">
+        <button id="search-toggle" class="key square" aria-label="查找任务" aria-expanded="false" aria-controls="search-popover" title="查找任务 · Ctrl+F"><span class="well"><span class="plunger"><span class="cap"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg></span></span></span></button>
+        <button id="settings-toggle" class="key setting-key" aria-label="打开设置" aria-haspopup="dialog" aria-expanded="false"><span class="well"><span class="plunger"><span class="cap"><svg class="word-setting" aria-hidden="true"><use href="#word-setting"/></svg></span></span></span></button>
+        <button id="hide-workspace" class="key esc-key" aria-label="收起工作区" title="收起工作区 · Esc"><span class="well"><span class="plunger"><span class="cap"><svg class="word-esc" aria-hidden="true"><use href="#word-esc"/></svg></span></span></span></button>
+      </div>
+      <section id="workspace-menu" class="popover" hidden aria-label="切换工作区"><span class="popover-label">工作区 / WORKSPACE</span><div id="workspace-options" role="menu"></div></section>
+      <section id="search-popover" class="popover" hidden aria-label="查找任务"><div class="search-heading"><label for="search-input" class="popover-label">找到那一步</label><button id="clear-search" class="plain-button">清除</button></div><input id="search-input" class="field" placeholder="输入任务标题…" maxlength="80" autocomplete="off"></section>
+    </header>
+    <nav class="bar optionsbar" aria-label="任务选项栏">
+      <div class="view-tabs" role="tablist" aria-label="任务视图">
+        <button class="key" id="view-graph" data-view="graph" role="tab" aria-selected="true" aria-controls="board" tabindex="0"><span class="well"><span class="plunger"><span class="cap"><svg class="icon" aria-hidden="true"><use href="#i-graph"/></svg>任务图</span></span></span></button>
+        <button class="key" id="view-category" data-view="category" role="tab" aria-selected="false" aria-controls="board" tabindex="-1"><span class="well"><span class="plunger"><span class="cap"><svg class="icon" aria-hidden="true"><use href="#i-category"/></svg>分类</span></span></span></button>
+        <button class="key" id="view-archive" data-view="archive" role="tab" aria-selected="false" aria-controls="board" tabindex="-1"><span class="well"><span class="plunger"><span class="cap"><svg class="icon" aria-hidden="true"><use href="#i-archive"/></svg>归档</span></span></span></button>
+      </div>
+      <span class="workspace-note"><i class="saved-dot"></i>每个想法，都可以成为起点</span>
+      <div class="options-end"><label class="select-wrap"><select id="status-filter" aria-label="按状态筛选"><option value="all">全部状态</option><option value="todo">未开始</option><option value="inprog">进行中</option><option value="done">已完成</option><option value="stopped">已停止</option></select></label><button id="new-task" class="key"><span class="well"><span class="plunger"><span class="cap"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>新建任务</span></span></span></button></div>
+    </nav>
+    <div class="board-wrap"><section id="board" class="board" role="tabpanel" aria-labelledby="view-graph" tabindex="0"></section></div>
+    <footer class="board-footer"><p id="board-summary"></p><p>独立交互预览 · 设置仅保存在此预览中</p></footer>
+  </div>
+  <div id="rest" class="rest" hidden><svg aria-hidden="true"><use href="#ghost-mark"/></svg><span>给桌面留一点空白。</span><button id="show-workspace" class="key"><span class="well"><span class="plunger"><span class="cap">打开工作区 ↗</span></span></span></button></div>
+</main>
+<dialog id="settings" class="settings" aria-labelledby="settings-heading">
+  <div class="panel-inner">
+    <header class="panel-head"><div><span class="panel-eyebrow">按自己的节奏 / PREFERENCES</span><h2 id="settings-heading" style="margin:0"><svg class="word-setting" role="img" aria-label="设置"><use href="#word-setting"/></svg></h2></div><button id="close-settings" class="key square small" aria-label="取消并关闭设置"><span class="well"><span class="plunger"><span class="cap"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></span></span></span></button></header>
+    <div class="settings-tabs" role="tablist" aria-label="设置分类"><button class="key" role="tab" id="tab-appearance" data-pane="appearance" aria-selected="true" aria-controls="pane-appearance" tabindex="0"><span class="well"><span class="plunger"><span class="cap">视觉与触感</span></span></span></button><button class="key" role="tab" id="tab-wand" data-pane="wand" aria-selected="false" aria-controls="pane-wand" tabindex="-1"><span class="well"><span class="plunger"><span class="cap">召唤与漫游</span></span></span></button><button class="key" role="tab" id="tab-shortcuts" data-pane="shortcuts" aria-selected="false" aria-controls="pane-shortcuts" tabindex="-1"><span class="well"><span class="plunger"><span class="cap">快捷键</span></span></span></button></div>
+    <div class="settings-body">
+      <section id="pane-appearance" role="tabpanel" aria-labelledby="tab-appearance">
+        <div class="setting-row"><div class="setting-copy"><strong id="shadow-label">纸面阴影</strong><small>保留栏体与卡片后方的偏移阴影</small></div><label class="switch"><input id="pref-shadow" type="checkbox" role="switch" aria-labelledby="shadow-label"><span class="switch-cap"></span></label></div>
+        <div class="setting-row"><div class="setting-copy"><strong id="rebound-label">键帽回弹</strong><small>松开时，轻轻回到原来的高度</small></div><label class="switch"><input id="pref-rebound" type="checkbox" role="switch" aria-labelledby="rebound-label"><span class="switch-cap"></span></label></div>
+        <div class="setting-row setting-stack"><div class="setting-copy"><strong id="motion-label">过渡效果</strong><small>调整按压回弹与面板打开的动效</small></div><div class="choice-row" role="group" aria-labelledby="motion-label"><button class="key" data-motion="high" aria-pressed="true"><span class="well"><span class="plunger"><span class="cap">完整</span></span></span></button><button class="key" data-motion="low" aria-pressed="false"><span class="well"><span class="plunger"><span class="cap">轻量</span></span></span></button><button class="key" data-motion="off" aria-pressed="false"><span class="well"><span class="plunger"><span class="cap">关闭</span></span></span></button></div></div>
+        <div class="setting-row setting-stack"><div class="slider-head"><label class="setting-copy" for="pref-scale"><strong>卡片大小</strong><small>让信息的密度刚刚好</small></label><output id="scale-value" class="value-stamp" for="pref-scale">100%</output></div><input class="range" id="pref-scale" type="range" min="85" max="110" step="5" value="100"></div>
+      </section>
+      <section id="pane-wand" role="tabpanel" aria-labelledby="tab-wand" hidden>
+        <div class="setting-row"><div class="setting-copy"><strong id="gesture-label">魔杖启用</strong><small>待机时画两圈，再单击开始创建</small></div><label class="switch"><input id="pref-gesture" type="checkbox" role="switch" aria-labelledby="gesture-label"><span class="switch-cap"></span></label></div>
+        <div class="setting-row setting-stack"><div class="slider-head"><label class="setting-copy" for="pref-dismiss"><strong>驱散速度</strong><small>屏高 / 秒 · 调低更容易驱散</small></label><output id="dismiss-value" class="value-stamp" for="pref-dismiss">1.5</output></div><input class="range" id="pref-dismiss" type="range" min="0.5" max="4" step="0.1" value="1.5"></div>
+        <div class="setting-row"><label class="setting-copy" for="pref-roam"><strong>闲置时漫游</strong><small>平时停在屏幕外，闲下来再相见</small></label><select class="field" id="pref-roam"><option value="180">3 分钟后</option><option value="300">5 分钟后</option><option value="600">10 分钟后</option><option value="0">关闭漫游</option></select></div>
+      </section>
+      <section id="pane-shortcuts" role="tabpanel" aria-labelledby="tab-shortcuts" hidden>
+        <div class="setting-row"><label class="setting-copy" for="pref-create"><strong>创建任务</strong><small>直接打开一张空白卡片</small></label><input class="field shortcut-field" id="pref-create" maxlength="40" autocomplete="off"></div>
+        <div class="setting-row"><label class="setting-copy" for="pref-graph"><strong>任务图</strong><small>回到所有想法之间</small></label><input class="field shortcut-field" id="pref-graph" maxlength="40" autocomplete="off"></div>
+        <p class="shortcut-note">预览中可用 <b>Esc</b> 关闭面板或收起工作区，<b>Ctrl + F</b> 查找任务。这里填写的全局快捷键仅用于设置界面体验。</p>
+      </section>
+    </div>
+    <footer class="settings-foot"><div class="settings-foot-top"><button id="reset-settings" class="plain-button">恢复默认</button><button id="save-settings" class="key"><span class="well"><span class="plunger"><span class="cap">保存设置 ↗</span></span></span></button></div><p class="panel-note">调整视觉项即可预览；保存后保留，关闭则取消本次修改。</p><p id="settings-error" class="error" role="alert"></p></footer>
+  </div>
+</dialog>
+<dialog id="creator" class="creator" aria-labelledby="creator-heading"><div class="panel-inner"><header class="panel-head"><div><span class="panel-eyebrow">下一步 / NEW TASK</span><h2 id="creator-heading">给想法起个名字</h2></div><button id="close-creator" class="key square small" aria-label="取消创建"><span class="well"><span class="plunger"><span class="cap"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></span></span></span></button></header><form id="task-form"><label for="task-title">标题</label><input id="task-title" class="field" maxlength="64" required placeholder="接下来想做什么？" autocomplete="off"><label for="task-category">分类</label><input id="task-category" class="field" maxlength="24" placeholder="交互设计" autocomplete="off"><label for="task-description">内容</label><textarea id="task-description" class="field" maxlength="180" placeholder="记录一点想法…"></textarea><div class="creator-actions"><small id="create-workspace"></small><button type="submit" class="key"><span class="well"><span class="plunger"><span class="cap">创建卡片 ↗</span></span></span></button></div><p id="creator-error" class="error" role="alert"></p></form></div></dialog>
+<div id="toast" class="toast" role="status" hidden></div>
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const storeKey = 'deskghost.tab-study.preferences.v1';
+  const defaults = { shadow:true, rebound:true, motion:'high', scale:100, gesture:true, dismiss:1.5, roam:300, createKey:'Ctrl+Alt+N', graphKey:'Ctrl+Alt+G' };
+  function normalize(value) {
+    const p = { ...defaults };
+    if (!value || typeof value !== 'object') return p;
+    for (const key of ['shadow','rebound','gesture']) if (typeof value[key] === 'boolean') p[key] = value[key];
+    if (['high','low','off'].includes(value.motion)) p.motion = value.motion;
+    if (Number.isFinite(value.scale)) p.scale = Math.max(85, Math.min(110, value.scale));
+    if (Number.isFinite(value.dismiss)) p.dismiss = Math.max(.5, Math.min(4, value.dismiss));
+    if ([0,180,300,600].includes(value.roam)) p.roam = value.roam;
+    for (const key of ['createKey','graphKey']) if (typeof value[key] === 'string' && value[key].trim() && value[key].length <= 40) p[key] = value[key];
+    return p;
+  }
+  let preferences = { ...defaults };
+  try { const stored = localStorage.getItem(storeKey); if (stored && stored.length < 4096) preferences = normalize(JSON.parse(stored)); } catch { /* The preview remains usable when browser storage is unavailable. */ }
+  let draft = { ...preferences }, workspace = 0, view = 'graph', toastTimer;
+  const labels = { todo:'未开始', inprog:'进行中', done:'已完成', stopped:'已停止' };
+  const workspaces = [
+    { name:'桌宠设计', subtitle:'交互、视觉与一点灵感', tasks:[
+      { id:1,title:'理清交互路径',description:'让创建、延续与回看，成为一条自然的路径。',category:'交互设计',status:'done',column:0,row:0,sources:[] },
+      { id:2,title:'打磨卡片材质',description:'米白纸面，厚实的投影。让每个想法都能被看见。',category:'视觉设计',status:'inprog',column:1,row:0,sources:[1] },
+      { id:3,title:'设计顶部操作栏',description:'按下、切换，再松开。试试指尖下的层次。',category:'视觉设计',status:'todo',column:2,row:0,sources:[2] },
+      { id:4,title:'设置页的触感',description:'让开关、分页和保存按钮，说同一种视觉语言。',category:'交互设计',status:'todo',column:1,row:1,sources:[1] },
+      { id:5,title:'原生窗口效果',description:'保留这段探索，继续向网页视觉方案推进。',category:'技术探索',status:'stopped',column:0,row:0,sources:[],archived:true }
+    ] },
+    { name:'PCB 布局', subtitle:'从原理图到一块真实的板子', tasks:[
+      { id:1,title:'整理接口需求',description:'电源、信号与安装孔，先把边界定义清楚。',category:'需求整理',status:'done',column:0,row:0,sources:[] },
+      { id:2,title:'完成器件布局',description:'把关键信号留在最短的路径上。',category:'PCB 设计',status:'inprog',column:1,row:0,sources:[1] },
+      { id:3,title:'布线与规则检查',description:'逐条确认规则，再向制板迈出一步。',category:'PCB 设计',status:'todo',column:2,row:0,sources:[2] }
+    ] },
+    { name:'算法实验', subtitle:'把一个猜想慢慢变成答案', tasks:[
+      { id:1,title:'准备实验样本',description:'整理输入与预期结果，留下可重复的起点。',category:'数据准备',status:'done',column:0,row:0,sources:[] },
+      { id:2,title:'尝试新的目标函数',description:'对照已有结果，观察误差如何变化。',category:'算法研究',status:'inprog',column:1,row:0,sources:[1] },
+      { id:3,title:'记录实验结论',description:'成功与失败，都可以成为下一次的来源。',category:'算法研究',status:'todo',column:2,row:0,sources:[2] }
+    ] }
+  ];
+  const ns = 'http://www.w3.org/2000/svg';
+  function icon(name, className = '') { const svg = document.createElementNS(ns,'svg'); svg.setAttribute('class',className); svg.setAttribute('aria-hidden','true'); const use = document.createElementNS(ns,'use'); use.setAttribute('href','#'+name); svg.append(use); return svg; }
+  function element(tag, className, text) { const node=document.createElement(tag); if(className) node.className=className; if(text!==undefined) node.textContent=text; return node; }
+  function notify(message) { clearTimeout(toastTimer); $('toast').textContent=message; $('toast').hidden=false; toastTimer=setTimeout(()=>{ $('toast').hidden=true; },2600); }
+  function applyVisual(p) { const root=document.documentElement; root.dataset.shadow=p.shadow?'on':'off'; root.dataset.rebound=p.rebound?'on':'off'; root.dataset.motion=p.motion; root.style.setProperty('--card-scale',p.scale/100); }
+  function card(task) {
+    const node=element('article','task-card'); node.dataset.taskId=task.id; node.setAttribute('aria-label',task.title+'，'+labels[task.status]);
+    node.append(icon('sticker-'+task.status,'sticker '+task.status),element('span','task-number','DG / '+String(task.id).padStart(3,'0')),element('h3','task-title',task.title));
+    const content=element('div','task-content'), bottom=element('div','task-bottom'); content.append(element('p','',task.description||'为这一步留下一点空白。')); bottom.append(element('span','category-pill',task.category),element('span','task-status',labels[task.status])); content.append(bottom); node.append(content); return node;
+  }
+  function render() {
+    const current=workspaces[workspace], term=$('search-input').value.trim().toLocaleLowerCase(), status=$('status-filter').value;
+    const tasks=current.tasks.filter(task=>Boolean(task.archived)===(view==='archive')&&(status==='all'||task.status===status)&&(!term||task.title.toLocaleLowerCase().includes(term)));
+    $('workspace-name').textContent=current.name; $('board-summary').textContent=`${current.name} / ${tasks.length} 张${view==='archive'?'归档':''}卡片${term?' · 正在筛选':''}`;
+    for(const button of document.querySelectorAll('[data-view]')) { const active=button.dataset.view===view; button.setAttribute('aria-selected',String(active)); button.tabIndex=active?0:-1; }
+    const board=$('board'); board.replaceChildren(); board.setAttribute('aria-labelledby','view-'+view); board.className=view==='category'?'board category-board':'board'; board.style.height='';
+    if(view==='category') {
+      for(const category of [...new Set(tasks.map(task=>task.category))]) { const column=element('div','category-column'), heading=element('div','category-heading',category); const items=tasks.filter(task=>task.category===category); heading.append(element('span','',String(items.length).padStart(2,'0'))); column.append(heading,...items.map(card)); board.append(column); }
+    } else {
+      const totalRows=Math.max(2,...tasks.map(task=>task.row+1)); board.style.height=(65+totalRows*242)+'px';
+      for(let index=0;index<3;index++) { const column=element('div','column'); column.style.left=(index*340)+'px'; column.append(element('strong','',String(index+1).padStart(2,'0')),element('small','',view==='archive'?'保留的路径':['起点','推进','下一步'][index])); board.append(column); }
+      const lines=document.createElementNS(ns,'svg'); lines.setAttribute('class','connections'); board.append(lines);
+      const scale=Number(getComputedStyle(document.documentElement).getPropertyValue('--card-scale'))||1;
+      for(const task of tasks) { const node=card(task); node.style.left=(40+task.column*340)+'px'; node.style.top=(82+task.row*242)+'px'; board.append(node); }
+      for(const task of tasks) for(const source of task.sources) { const parent=tasks.find(item=>item.id===source); if(!parent)continue; const a={x:40+parent.column*340+244*scale+7,y:82+parent.row*242+110*scale},b={x:40+task.column*340-4,y:82+task.row*242+110*scale}; const path=document.createElementNS(ns,'path'); const middle=(a.x+b.x)/2; path.setAttribute('d',`M${a.x} ${a.y}C${middle} ${a.y},${middle} ${b.y},${b.x} ${b.y}`); lines.append(path); for(const point of [a,b]){const dot=document.createElementNS(ns,'circle');dot.setAttribute('cx',point.x);dot.setAttribute('cy',point.y);dot.setAttribute('r','4');lines.append(dot);} }
+    }
+    if(!tasks.length) board.append(element('p','empty',view==='archive'?'这里暂时没有归档任务。':'没有找到匹配的任务，换一个关键词试试。'));
+  }
+  function closePopovers() { for(const [panel,button] of [['workspace-menu','workspace-toggle'],['search-popover','search-toggle']]) { $(panel).hidden=true; $(button).setAttribute('aria-expanded','false'); } }
+  function togglePopover(panel,button) { const opening=$(panel).hidden; closePopovers(); $(panel).hidden=!opening; $(button).setAttribute('aria-expanded',String(opening)); if(opening) (panel==='search-popover'?$('search-input'):$(panel).querySelector('[aria-checked="true"]')).focus(); }
+  function renderWorkspaces() { $('workspace-options').replaceChildren(); workspaces.forEach((item,index)=>{const button=element('button','workspace-option'); button.setAttribute('role','menuitemradio');button.setAttribute('aria-checked',String(index===workspace)); const copy=element('span',''); copy.append(element('b','',item.name),element('small','',item.subtitle));button.append(element('span',''),copy);button.addEventListener('click',()=>{workspace=index;view='graph';$('search-input').value='';$('status-filter').value='all';closePopovers();renderWorkspaces();render();$('workspace-toggle').focus();});$('workspace-options').append(button);}); }
+  $('workspace-toggle').addEventListener('click',()=>togglePopover('workspace-menu','workspace-toggle'));
+  $('search-toggle').addEventListener('click',()=>togglePopover('search-popover','search-toggle'));
+  $('search-input').addEventListener('input',render); $('status-filter').addEventListener('change',render);
+  $('clear-search').addEventListener('click',()=>{$('search-input').value='';render();$('search-input').focus();});
+  document.addEventListener('pointerdown',event=>{if(!event.target.closest('.popover,#workspace-toggle,#search-toggle'))closePopovers();});
+  for(const button of document.querySelectorAll('[data-view]'))button.addEventListener('click',()=>{view=button.dataset.view;closePopovers();render();});
+  for(const list of document.querySelectorAll('[role="tablist"]'))list.addEventListener('keydown',event=>{const tabs=[...list.querySelectorAll('[role="tab"]')];let index=tabs.indexOf(document.activeElement);if(index<0)return;if(event.key==='ArrowRight')index=(index+1)%tabs.length;else if(event.key==='ArrowLeft')index=(index+tabs.length-1)%tabs.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=tabs.length-1;else return;event.preventDefault();tabs[index].focus();tabs[index].click();});
+  $('workspace-options').addEventListener('keydown',event=>{const options=[...$('workspace-options').children];let index=options.indexOf(document.activeElement);if(event.key==='ArrowDown')index=(index+1)%options.length;else if(event.key==='ArrowUp')index=(index+options.length-1)%options.length;else return;event.preventDefault();options[index].focus();});
+  // Keep keyboard depression visible for the whole key hold, including Enter.
+  document.addEventListener('keydown',event=>{if(!event.repeat&&[' ','Enter'].includes(event.key)&&event.target.matches('button.key'))event.target.classList.add('held');});
+  document.addEventListener('keyup',()=>document.querySelectorAll('.held').forEach(node=>node.classList.remove('held')));
+  document.addEventListener('focusout',event=>event.target.classList?.remove('held'));
+  window.addEventListener('blur',()=>document.querySelectorAll('.held').forEach(node=>node.classList.remove('held')));
+  function fillSettings() { $('pref-shadow').checked=draft.shadow;$('pref-rebound').checked=draft.rebound;$('pref-gesture').checked=draft.gesture;$('pref-scale').value=draft.scale;$('scale-value').textContent=draft.scale+'%';$('pref-dismiss').value=draft.dismiss;$('dismiss-value').textContent=draft.dismiss.toFixed(1);$('pref-roam').value=draft.roam;$('pref-create').value=draft.createKey;$('pref-graph').value=draft.graphKey;for(const button of document.querySelectorAll('[data-motion]'))if(button.tagName==='BUTTON')button.setAttribute('aria-pressed',String(button.dataset.motion===draft.motion)); }
+  function previewSettings() { applyVisual(draft); render(); }
+  function openSettings() { closePopovers();draft={...preferences};fillSettings();$('settings-error').textContent='';$('settings-toggle').setAttribute('aria-expanded','true');$('settings').showModal(); }
+  $('settings-toggle').addEventListener('click',openSettings);
+  $('close-settings').addEventListener('click',()=>$('settings').close());
+  $('settings').addEventListener('close',()=>{applyVisual(preferences);render();$('settings-toggle').setAttribute('aria-expanded','false');$('settings-toggle').focus();});
+  for(const button of document.querySelectorAll('[data-pane]'))button.addEventListener('click',()=>{for(const tab of document.querySelectorAll('[data-pane]')){const active=tab===button;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1;$('pane-'+tab.dataset.pane).hidden=!active;}});
+  for(const [id,key] of [['pref-shadow','shadow'],['pref-rebound','rebound'],['pref-gesture','gesture']])$(id).addEventListener('change',()=>{draft[key]=$(id).checked;previewSettings();});
+  $('pref-scale').addEventListener('input',()=>{draft.scale=Number($('pref-scale').value);$('scale-value').textContent=draft.scale+'%';previewSettings();});
+  $('pref-dismiss').addEventListener('input',()=>{draft.dismiss=Number($('pref-dismiss').value);$('dismiss-value').textContent=draft.dismiss.toFixed(1);});
+  $('pref-roam').addEventListener('change',()=>draft.roam=Number($('pref-roam').value));
+  for(const button of document.querySelectorAll('button[data-motion]'))button.addEventListener('click',()=>{draft.motion=button.dataset.motion;for(const option of document.querySelectorAll('button[data-motion]'))option.setAttribute('aria-pressed',String(option===button));previewSettings();});
+  $('reset-settings').addEventListener('click',()=>{draft={...defaults};fillSettings();previewSettings();$('settings-error').textContent='';});
+  $('save-settings').addEventListener('click',()=>{draft.createKey=$('pref-create').value.trim();draft.graphKey=$('pref-graph').value.trim();if(!draft.createKey||!draft.graphKey){$('settings-error').textContent='请填写两个快捷键，或恢复默认设置。';return;}if(draft.createKey.toLowerCase()===draft.graphKey.toLowerCase()){$('settings-error').textContent='创建任务与任务图请使用不同的快捷键。';return;}try{localStorage.setItem(storeKey,JSON.stringify(draft));}catch{$('settings-error').textContent='当前浏览器无法保存设置；本次预览仍可继续。';return;}preferences={...draft};$('settings').close();notify('设置已保存在此预览中。');});
+  function hideWorkspace() { closePopovers();$('workspace-shell').hidden=true;$('rest').hidden=false;$('show-workspace').focus(); }
+  $('hide-workspace').addEventListener('click',hideWorkspace);
+  $('show-workspace').addEventListener('click',()=>{$('rest').hidden=true;$('workspace-shell').hidden=false;$('hide-workspace').focus();});
+  $('new-task').addEventListener('click',()=>{closePopovers();$('task-form').reset();$('creator-error').textContent='';$('create-workspace').textContent=workspaces[workspace].name+' / 最新时间列';$('creator').showModal();$('task-title').focus();});
+  $('close-creator').addEventListener('click',()=>$('creator').close());
+  $('task-form').addEventListener('submit',event=>{event.preventDefault();const title=$('task-title').value.trim();if(!title){$('task-title').focus();return;}const tasks=workspaces[workspace].tasks;if(tasks.length>=20){$('creator-error').textContent='本次预览最多保留 20 张示例卡片，刷新即可重新体验。';return;}const lastRows=tasks.filter(task=>task.column===2&&!task.archived).map(task=>task.row);tasks.push({id:Math.max(...tasks.map(task=>task.id))+1,title,description:$('task-description').value.trim(),category:$('task-category').value.trim()||'未分类',status:'todo',column:2,row:lastRows.length?Math.max(...lastRows)+1:0,sources:[]});view='graph';$('status-filter').value='all';$('search-input').value='';$('creator').close();render();const created=$('board').querySelector('.task-card:last-child');created?.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});notify('新卡片已放在最新时间列；示例任务刷新后重置。');});
+  document.addEventListener('keydown',event=>{if(event.defaultPrevented)return;if($('settings').open||$('creator').open)return;const input=event.target.matches('input,textarea,select');if(event.key==='Escape'){event.preventDefault();if(!$('workspace-menu').hidden||!$('search-popover').hidden){const trigger=!$('workspace-menu').hidden?'workspace-toggle':'search-toggle';closePopovers();$(trigger).focus();}else if(!$('workspace-shell').hidden)hideWorkspace();}else if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='f'&&!$('workspace-shell').hidden){event.preventDefault();closePopovers();togglePopover('search-popover','search-toggle');}else if(!input&&!event.ctrlKey&&!event.altKey&&!event.metaKey&&event.key.toLowerCase()==='n'&&!$('workspace-shell').hidden){event.preventDefault();$('new-task').click();}});
+  applyVisual(preferences);renderWorkspaces();render();
+})();
+</script>
+</body>
+</html>
