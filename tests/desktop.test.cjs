@@ -109,7 +109,39 @@ test('speed dismissal is independent of direction, position and display scale', 
   ]) assert.ok(replay(points).every(found => !found), 'time gaps, invalid samples and display changes reset the run');
 });
 
-test('transparent Electron UI: direct manipulation, keyboard capture and durable saves', { skip: !process.argv.includes('--ui'), timeout: 110000 }, async context => {
+test('sticker swipes respect task stages and keep the peel surface continuous', async () => {
+  const { nextStickerState, stickerGestureDirection, peelSurface } = await import('../desktop/web/sticker.js');
+  const { graphGeometry } = await import('../desktop/web/graph.js');
+  assert.equal(graphGeometry.cardWidth / graphGeometry.cardHeight, 621.3463 / 457.9779);
+  assert.ok(graphGeometry.columnStep > graphGeometry.cardWidth && graphGeometry.rowStep > graphGeometry.cardHeight);
+  for (const [state, advance, reverse] of [
+    ['NotStarted', 'InProgress', null], ['InProgress', 'Completed', 'NotStarted'],
+    ['Completed', null, 'InProgress'], ['Stopped', 'InProgress', 'NotStarted']
+  ]) {
+    assert.equal(nextStickerState(state, 'advance'), advance);
+    assert.equal(nextStickerState(state, 'reverse'), reverse);
+    assert.equal(nextStickerState(state, 'stop'), state === 'Stopped' ? null : 'Stopped');
+  }
+  for (const [dx, dy, expected] of [[0, -50, 'stop'], [-30, -30, 'stop'], [30, -30, 'stop'], [-30, -3, 'advance'], [30, -3, 'reverse'], [0, 50, null], [3, -3, null]])
+    assert.equal(stickerGestureDirection(dx, dy), expected, 'upward intent is distinct from horizontal hand tremors');
+  assert.equal(stickerGestureDirection(-50, -60, 'advance'), 'advance', 'a deliberate pull keeps its initial direction');
+  assert.equal(stickerGestureDirection(30, -3, 'stop'), 'stop');
+  assert.equal(stickerGestureDirection(NaN, -30), null);
+  for (const progress of [0, .12, .35, .66, .85, 1]) {
+    let previous = null;
+    for (let u = -90; u <= 90; u += .5) {
+      const point = peelSurface(u, 90, progress, 1);
+      const reverse = peelSurface(-u, 90, progress, -1);
+      assert.ok(Object.values(point).every(Number.isFinite));
+      assert.ok(point.z >= 0, 'the material lifts away from the card');
+      assert.ok(Math.abs(point.x + reverse.x) < 1e-9 && Math.abs(point.z - reverse.z) < 1e-9, 'reverse swipes mirror the same fold');
+      if (previous) assert.ok(Math.hypot(point.x - previous.x, point.z - previous.z) <= .500001, 'neighboring material points cannot stretch or jump apart');
+      previous = point;
+    }
+  }
+});
+
+test('leather workspace: direct manipulation, keyboard capture and durable saves', { skip: !process.argv.includes('--ui'), timeout: 180000 }, async context => {
   const { _electron } = require('playwright');
   const output = path.join(root, '.local', 'web-smoke', String(Date.now()));
   await fs.mkdir(output, { recursive: true });
@@ -124,6 +156,10 @@ test('transparent Electron UI: direct manipulation, keyboard capture and durable
   const app = await _electron.launch({ ...(executablePath ? { executablePath } : {}), args: [...(executablePath ? [] : [root]), '--data-dir', output], cwd: root, timeout: 30000, env: electronEnv });
   try {
     const page = await app.firstWindow();
+    const waitScene = async open => page.waitForFunction(open => {
+      const scene = document.getElementById('desk-scene');
+      return scene.dataset.open === String(open) && scene.dataset.moving !== 'true';
+    }, open);
     // CDP typing does not reset Windows idle time. Keep the unrelated checks
     // active, then explicitly advance idle time only in the roaming scenario.
     await app.evaluate(({ powerMonitor }) => {
@@ -132,6 +168,7 @@ test('transparent Electron UI: direct manipulation, keyboard capture and durable
     });
     page.on('pageerror', error => errors.push(error.message));
     await page.waitForFunction(() => document.getElementById('boot-screen')?.hidden, null, { timeout: 25000 });
+    await waitScene(true);
     assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgba(0, 0, 0, 0)');
     const native = await app.evaluate(({ BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows()[0];
@@ -140,11 +177,56 @@ test('transparent Electron UI: direct manipulation, keyboard capture and durable
     assert.ok(['#000000', '#00000000'].includes(native.background)); assert.equal(native.resizable, false);
     assert.equal(native.sandbox, true); assert.equal(native.node, false); assert.equal(native.isolated, true);
     const transparentCapture = await page.screenshot({ omitBackground: true });
-    const cornerAlpha = await app.evaluate(({ nativeImage }, bytes) => nativeImage.createFromBuffer(Buffer.from(bytes)).toBitmap()[3], [...transparentCapture]);
-    assert.equal(cornerAlpha, 0, 'pixels outside floating tools retain real alpha transparency');
+    const scene = await page.locator('#desk-scene').evaluate(element => {
+      const box = element.getBoundingClientRect();
+      return { x: (box.left + 18) / innerWidth, y: (box.top + box.height / 2) / innerHeight,
+        ownsPanels: ['manager', 'settings-panel', 'name-prompt', 'toast', 'boot-screen'].every(id => element.contains(document.getElementById(id))),
+        leather: getComputedStyle(element.querySelector('.scene-leather')).backgroundColor };
+    });
+    const captureAlpha = await app.evaluate(({ nativeImage }, { bytes, x, y }) => {
+      const image = nativeImage.createFromBuffer(Buffer.from(bytes)), { width, height } = image.getSize(), pixels = image.toBitmap();
+      return { outside: pixels[3], inside: pixels[(Math.floor(y * height) * width + Math.floor(x * width)) * 4 + 3] };
+    }, { bytes: [...transparentCapture], x: scene.x, y: scene.y });
+    assert.equal(captureAlpha.outside, 0, 'the desktop outside the leather scene retains real alpha transparency');
+    assert.equal(captureAlpha.inside, 255, 'the leather workspace has a solid background');
+    assert.equal(scene.ownsPanels, true, 'workspace controls and overlays move with one scene');
+    assert.equal(await page.locator('#composer').evaluate(element => element.parentElement === document.body), true, 'the physical card can be carried independently of the board');
+    assert.notEqual(scene.leather, 'rgba(0, 0, 0, 0)');
+    await page.evaluate(() => {
+      const scene = document.getElementById('desk-scene');
+      window.testSceneFrames = [];
+      let frame = 0;
+      const capture = () => {
+        frame = 0;
+        if (scene.dataset.moving !== 'true') return;
+        const style = getComputedStyle(scene), matrix = new DOMMatrixReadOnly(style.transform);
+        if (window.testSceneFrames.length < 400) window.testSceneFrames.push({ x: matrix.m41, y: matrix.m42, scaleX: matrix.m11, scaleY: matrix.m22, opacity: Number(style.opacity) });
+        frame = requestAnimationFrame(capture);
+      };
+      const observer = new MutationObserver(() => { if (scene.dataset.moving === 'true' && !frame) frame = requestAnimationFrame(capture); });
+      observer.observe(scene, { attributes: true, attributeFilter: ['data-moving'] });
+      window.stopSceneProbe = () => { observer.disconnect(); cancelAnimationFrame(frame); };
+    });
     assert.equal(await page.locator('#flock').evaluate(canvas => Math.round(canvas.getBoundingClientRect().width) === innerWidth), true);
+    assert.equal(await page.evaluate(async () => {
+      const fonts = await Promise.all([document.fonts.load('400 16px Bungee'), document.fonts.load('400 23px Teko'), document.fonts.load('400 30px "Smiley Sans"'), document.fonts.load('400 18px Orbitron')]);
+      return fonts.every(family => family.length > 0 && family.every(face => face.status === 'loaded'));
+    }), true, 'the bundled heading and body fonts load without a network connection');
     assert.equal((await page.evaluate(() => window.deskghost.invoke('bootstrap'))).settings.dismissSpeed, 1.5, 'older settings receive the default dismissal speed');
     await page.locator('#open-settings').click();
+    await page.locator('[data-settings-tab="visual"]').click();
+    for (const effects of ['low', 'off', 'high']) {
+      await page.locator(`button[data-effects="${effects}"]`).click();
+      assert.equal(await page.locator('#setting-effects').inputValue(), effects);
+      assert.equal(await page.locator(`button[data-effects="${effects}"]`).getAttribute('aria-pressed'), 'true');
+    }
+    await page.locator('[data-settings-tab="wand"]').click();
+    assert.equal(await page.locator('#settings-wand').isVisible(), true);
+    assert.equal(await page.locator('#settings-visual').isVisible(), false);
+    await page.waitForFunction(() => {
+      const cap = document.querySelector('[data-settings-tab="wand"] .plunger');
+      return cap && new DOMMatrixReadOnly(getComputedStyle(cap).transform).m42 >= 5.9;
+    });
     await page.locator('#setting-dismiss-speed').fill('2.4');
     assert.equal(await page.locator('#dismiss-speed-value').textContent(), '2.4');
     await page.screenshot({ path: path.join(output, 'dismiss-settings.png'), omitBackground: true });
@@ -153,6 +235,25 @@ test('transparent Electron UI: direct manipulation, keyboard capture and durable
     assert.equal(JSON.parse(await fs.readFile(path.join(output, 'web-settings.json'), 'utf8')).dismissSpeed, 2.4, 'the configured threshold is durably saved');
     for (const invalid of [.49, 4.01, '1.5', null]) await assert.rejects(page.evaluate(dismissSpeed => window.deskghost.invoke('updateSettings', { dismissSpeed }), invalid));
     assert.equal((await page.evaluate(() => window.deskghost.invoke('bootstrap'))).settings.dismissSpeed, 2.4, 'invalid settings preserve the last valid value');
+    const flipCard = async face => {
+      if (await page.locator('#card-rotor').getAttribute('data-face') !== face) await page.locator('#flip-card').click();
+      await page.waitForFunction(face => {
+        const rotor = document.getElementById('card-rotor');
+        return rotor.dataset.face === face && !rotor.getAnimations().some(animation => animation.playState === 'running');
+      }, face);
+      assert.equal(await page.locator('#detail-card').evaluate(element => element.inert), face === 'back');
+      assert.equal(await page.locator('#detail-back').evaluate(element => element.inert), face === 'front');
+    };
+    const writeNote = async text => {
+      await flipCard('back');
+      if (await page.locator('#attach-note').isVisible()) await page.locator('#attach-note').click();
+      assert.equal(await page.locator('#task-notes').isEnabled(), true);
+      await page.locator('#task-notes').fill(text);
+    };
+    const finishEditor = async () => {
+      await page.locator('#submit-task').click();
+      await page.waitForFunction(() => document.getElementById('composer').hidden);
+    };
     const tapWand = async (hold = false) => {
       await page.waitForFunction(() => {
         const anchor = document.getElementById('wand-anchor');
@@ -179,6 +280,7 @@ test('transparent Electron UI: direct manipulation, keyboard capture and durable
         await page.waitForFunction(() => document.body.dataset.mode === 'create');
         assert.equal(await page.locator('#task-title').evaluate(input => input === document.activeElement), true, 'one click places focus in the title before typing');
         assert.equal(await page.locator('#wand-anchor').isVisible(), false);
+        assert.equal(await page.locator('#desk-scene').getAttribute('data-open'), 'false', 'wand capture leaves the board rolled away until placement');
       } finally {
         await app.evaluate(({ screen }) => { screen.getCursorScreenPoint = globalThis.testClickCursor; delete globalThis.testClickCursor; });
       }
@@ -285,14 +387,15 @@ test('transparent Electron UI: direct manipulation, keyboard capture and durable
       await page.evaluate(() => { window.stopRoamingProbe(); delete window.stopRoamingProbe; delete window.testRoaming; });
     }
     await page.evaluate(() => window.deskghost.invoke('summon', { mode: 'graph' }));
+    await waitScene(true);
     const fixture = await page.evaluate(async () => {
       const call = (method, payload = {}) => window.deskghost.invoke(method, payload);
       let envelope = await call('bootstrap'); const workspaceId = envelope.activeWorkspaceId;
-      const create = async (title, category, column, row) => (await call('createTask', { workspaceId, title, category, description: '可以拖动卡片、连接端点，让下一步自然发生。', column, row })).result.taskId;
-      const origin = await create('定义产品方向', '项目规划', 0, 0);
-      const pcb = await create('PCB 原理图设计', 'PCB 设计', 1, 0);
-      const algorithm = await create('算法方案研究', '算法研究', 1, 1);
-      const merge = await create('软硬件联合验证', '系统集成', 2, 0);
+      const create = async (title, category, column, row) => (await call('createTask', { workspaceId, title, category, description: 'Connect the dots. Explore the next step, one idea at a time.', column, row })).result.taskId;
+      const origin = await create('Find the focus', 'Planning', 0, 0);
+      const pcb = await create('PCB design', 'Hardware', 1, 0);
+      const algorithm = await create('Algorithm study', 'Research', 1, 1);
+      const merge = await create('Bring it together', 'Integration', 2, 0);
       await call('addLink', { workspaceId, sourceId: origin, targetId: algorithm });
       await call('addLink', { workspaceId, sourceId: algorithm, targetId: merge });
       await call('setState', { workspaceId, taskId: origin, state: 'Completed' });
@@ -303,17 +406,148 @@ test('transparent Electron UI: direct manipulation, keyboard capture and durable
     await page.waitForTimeout(500);
     const card = id => page.locator(`.dg-task-card[data-task-id="${id}"]`);
     await card(fixture.pcb).waitFor();
-    const drag = async (from, to) => { await page.mouse.move(from.x, from.y); await page.mouse.down(); await page.mouse.move(to.x, to.y, { steps: 22 }); await page.mouse.up(); await page.waitForTimeout(420); };
+    const revealCards = async (...ids) => {
+      await waitScene(true);
+      // Pan the physical board through its public wheel interaction; tests must
+      // not shrink cards to fit the old all-columns camera.
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const shift = await page.locator('#graph-board').evaluate((board, ids) => {
+          const bounds = board.getBoundingClientRect();
+          const cards = ids.map(id => board.querySelector(`.dg-task-card[data-task-id="${id}"]`).getBoundingClientRect());
+          const left = Math.min(...cards.map(box => box.left)) - 38, right = Math.max(...cards.map(box => box.right)) + 38;
+          const top = Math.min(...cards.map(box => box.top)) - 38, bottom = Math.max(...cards.map(box => box.bottom)) + 28;
+          return { x: left < bounds.left ? left - bounds.left : right > bounds.right ? right - bounds.right : 0,
+            y: top < bounds.top ? top - bounds.top : bottom > bounds.bottom ? bottom - bounds.bottom : 0 };
+        }, ids);
+        if (Math.abs(shift.x) > 1) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: shift.x, shiftKey: true });
+        if (Math.abs(shift.y) > 1) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: shift.y });
+        if (Math.abs(shift.x) <= 1 && Math.abs(shift.y) <= 1) break;
+      }
+    };
+    await revealCards(fixture.pcb);
+    const drag = async (from, to, during) => {
+      await page.mouse.move(from.x, from.y); await page.mouse.down();
+      // Inspect the lifted material away from the board edge, where a held
+      // pointer intentionally auto-pans the graph and changes the drop row.
+      if (during) { await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 11 }); await during(); }
+      await page.mouse.move(to.x, to.y, { steps: during ? 11 : 22 }); await page.mouse.up(); await page.waitForTimeout(420);
+    };
     const center = async locator => { const b = await locator.boundingBox(); assert.ok(b); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
+    const clickTagHead = async locator => {
+      const box = await locator.boundingBox(); assert.ok(box);
+      // The front hides the label and its shaft behind the card. Only the
+      // coloured arrowhead to the left is a pointer target.
+      const point = { x: box.x + 6, y: box.y + box.height / 2 };
+      assert.equal(await locator.evaluate((tag, point) => document.elementFromPoint(point.x, point.y)?.closest('.dg-paper-tag') === tag, point), true, 'the exposed colour head remains clickable without a connection point intercepting it');
+      await page.mouse.click(point.x, point.y);
+    };
+    const dragToTrash = async () => {
+      const target = await center(page.locator('#task-trash'));
+      await page.mouse.move(target.x, target.y, { steps: 22 }); await page.mouse.up(); await page.waitForTimeout(420);
+    };
     const snapshot = () => page.evaluate(() => window.deskghost.invoke('bootstrap'));
     const workspace = async () => (await snapshot()).documents.find(doc => doc.id === fixture.workspaceId).workspace;
-    await drag(await center(card(fixture.origin).locator('[data-port="out"]')), await center(card(fixture.pcb).locator('[data-port="in"]')));
+    const connect = async (sourceId, targetId) => {
+      await revealCards(sourceId, targetId);
+      await card(sourceId).locator('.dg-card-description').click();
+      assert.equal(await card(sourceId).locator('.dg-connect-action').count(), 0, 'selection itself exposes the connection points');
+      assert.equal(await card(sourceId).locator('[data-port="out"]').evaluate(element => getComputedStyle(element).pointerEvents), 'auto');
+      await drag(await center(card(sourceId).locator('[data-port="out"]')), await center(card(targetId).locator('[data-port="in"]')));
+    };
+    const cardLift = async id => card(id).locator('.dg-card-surface').evaluate(surface => {
+      const shadow = getComputedStyle(surface.querySelector('.dg-card-shadow')), face = getComputedStyle(surface.querySelector('.dg-card-faceart'));
+      return { shadow: shadow.translate.split(' ').map(Number.parseFloat), face: face.translate.split(' ').map(Number.parseFloat), filter: getComputedStyle(surface).filter, boxShadow: getComputedStyle(surface).boxShadow };
+    });
+    const graphGeometry = await page.evaluate(async () => (await import('./graph.js')).graphGeometry);
+    const camera = () => page.locator('.dg-graph-stage').evaluate(element => { const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform); return { x: matrix.m41, y: matrix.m42, scale: matrix.m11 }; });
+    const beforeWheel = await camera();
+    const horizontalOverflow = await page.locator('#graph-board').evaluate(board => {
+      const last = board.querySelector('.dg-new-column') || board.querySelector('.dg-column:last-child');
+      return last.getBoundingClientRect().right + 66 > board.getBoundingClientRect().right;
+    });
+    await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: -200, ctrlKey: true });
+    assert.deepEqual(await camera(), beforeWheel, 'Ctrl+wheel cannot zoom or pan physical cards');
+    await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: 100, shiftKey: true });
+    assert.equal((await camera()).scale, 1);
+    if (horizontalOverflow) assert.ok((await camera()).x < beforeWheel.x, 'Shift+wheel scrolls overflowing time slices');
+    else assert.equal((await camera()).x, beforeWheel.x, 'a board that already fits does not expose empty off-board space');
+    assert.equal((await camera()).y, beforeWheel.y, 'Shift+wheel never moves task rows');
+    await page.locator('#fit-graph').click();
+    await revealCards(fixture.pcb);
+    const beforeRows = await camera();
+    const allRowsFit = await page.locator('#graph-board').evaluate(board => Math.max(...[...board.querySelectorAll('.dg-task-card')].map(card => card.getBoundingClientRect().bottom)) <= board.getBoundingClientRect().bottom);
+    await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: 120 });
+    if (allRowsFit) assert.equal((await camera()).y, beforeRows.y, 'ordinary wheel leaves a board with no overflowing rows still');
+    await page.evaluate(({ workspaceId, taskId }) => window.deskghost.invoke('moveTask', { workspaceId, taskId, column: 1, row: 40 }), { workspaceId: fixture.workspaceId, taskId: fixture.algorithm });
+    const beforeOverflow = await camera();
+    await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: 320 });
+    assert.ok((await camera()).y < beforeOverflow.y, 'overflowing task stacks allow vertical movement');
+    await page.locator('#undo').click();
+    await page.locator('#fit-graph').click(); await revealCards(fixture.pcb);
+    const graphSurface = await card(fixture.pcb).locator('.dg-card-surface').evaluate(element => {
+      const box = element.getBoundingClientRect();
+      return { width: element.offsetWidth, ratio: box.width / box.height, text: element.innerText, titleSize: parseFloat(getComputedStyle(element.querySelector('.dg-card-title')).fontSize) };
+    });
+    assert.equal(graphSurface.width, graphGeometry.cardWidth);
+    assert.ok(graphSurface.titleSize > 0 && graphSurface.titleSize / graphSurface.width <= 95 / 621.3463 + .001, 'graph titles fit the complete line below the original maximum size');
+    assert.ok(Math.abs(graphSurface.ratio - 621.3463 / 457.9779) < .001, 'graph card body preserves the supplied artwork aspect ratio');
+    assert.ok(!graphSurface.text.includes(fixture.pcb));
+    assert.doesNotMatch(graphSurface.text, /\b(?:TODO|IN PROGRESS|DONE|STOPPED)\b/, 'the card surface expresses status only through its sticker');
+    assert.equal(await card(fixture.pcb).locator('.dg-task-state, .dg-card-meta').count(), 0);
+    const peel = async (direction, state, artwork) => {
+      const button = card(fixture.pcb).locator('.dg-sticker-slot .dg-sticker-button');
+      const box = await button.boundingBox(); assert.ok(box);
+      const start = direction === 'advance' ? .78 : .22;
+      if (direction === 'stop') await drag({ x: box.x + box.width * .55, y: box.y + box.height * .72 }, { x: box.x + box.width * .28, y: box.y + box.height * .1 });
+      else await drag({ x: box.x + box.width * start, y: box.y + box.height / 2 }, { x: box.x + box.width * (1 - start), y: box.y + box.height / 2 });
+      await page.waitForFunction(({ id, state, artwork }) => {
+        const button = document.querySelector(`.dg-task-card[data-task-id="${id}"] .dg-sticker-button`);
+        const image = button?.querySelector('img');
+        return button?.dataset.state === state && !button.hasAttribute('aria-busy') && !button.classList.contains('is-peeling') && image?.complete && image.naturalWidth > 0 && image.src.endsWith(`/${artwork}.svg`);
+      }, { id: fixture.pcb, state, artwork }, { timeout: 5000 });
+      assert.equal((await workspace()).tasks.find(task => task.id === fixture.pcb).state, state);
+    };
+    const beforePeel = (await workspace()).tasks.find(task => task.id === fixture.pcb);
+    await peel('advance', 'InProgress', 'inprog');
+    await peel('reverse', 'NotStarted', 'todo');
+    await peel('stop', 'Stopped', 'stopped');
+    await peel('reverse', 'NotStarted', 'todo');
+    assert.deepEqual(await page.locator('.dg-task-card.is-selected').evaluateAll(cards => cards.map(card => card.dataset.taskId)), [fixture.pcb], 'using a sticker selects the card whose status changes');
+    const selectedLift = await cardLift(fixture.pcb);
+    assert.ok(selectedLift.shadow[0] > 0 && selectedLift.shadow[1] > 0 && selectedLift.face[1] < 0, 'selection lifts the face opposite its offset shadow');
+    assert.equal(selectedLift.filter, 'none'); assert.equal(selectedLift.boxShadow, 'none', 'selection uses the original silhouette without a glow');
+    const afterPeel = (await workspace()).tasks.find(task => task.id === fixture.pcb);
+    assert.deepEqual([afterPeel.column, afterPeel.row], [beforePeel.column, beforePeel.row], 'peeling does not drag the task card');
+    await page.evaluate(({ workspaceId, taskId }) => window.deskghost.invoke('setState', { workspaceId, taskId, state: 'Stopped' }), { workspaceId: fixture.workspaceId, taskId: fixture.pcb });
+    for (const state of ['NotStarted', 'InProgress', 'Completed', 'Stopped', '']) {
+      await page.locator(`[data-state-filter="${state}"]`).click();
+      assert.equal(await page.locator(`[data-state-filter="${state}"]`).getAttribute('aria-pressed'), 'true');
+      assert.equal(await page.locator('[data-state-filter][aria-pressed="true"]').count(), 1);
+      const actual = await page.locator('.dg-task-card:not(.is-dimmed)').evaluateAll(cards => cards.map(card => card.dataset.taskId).sort());
+      const expected = (await workspace()).tasks.filter(task => !state || task.state === state).map(task => task.id).sort();
+      assert.deepEqual(actual, expected, `the ${state || 'All'} stage key highlights exactly its tasks`);
+    }
+    await page.evaluate(({ workspaceId, taskId }) => window.deskghost.invoke('setState', { workspaceId, taskId, state: 'NotStarted' }), { workspaceId: fixture.workspaceId, taskId: fixture.pcb });
+    await page.evaluate(({ workspaceId, taskId }) => window.deskghost.invoke('archiveTask', { workspaceId, taskId }), { workspaceId: fixture.workspaceId, taskId: fixture.origin });
+    await page.locator('#archive-mode').click();
+    assert.equal(await page.locator('#archive-mode').getAttribute('aria-selected'), 'true');
+    assert.deepEqual(await page.locator('.dg-task-card').evaluateAll(cards => cards.map(card => card.dataset.taskId)), [fixture.origin]);
+    await page.locator('#graph-mode').click();
+    await page.evaluate(({ workspaceId, taskId }) => window.deskghost.invoke('unarchiveTask', { workspaceId, taskId }), { workspaceId: fixture.workspaceId, taskId: fixture.origin });
+    await page.locator('#fit-graph').click(); await page.waitForTimeout(300);
+    await connect(fixture.origin, fixture.pcb);
     assert.ok((await workspace()).links.some(link => link.sourceId === fixture.origin && link.targetId === fixture.pcb), 'drag connects cards');
+    await revealCards(fixture.pcb, fixture.algorithm);
     const start = await card(fixture.pcb).boundingBox();
     const next = await card(fixture.algorithm).boundingBox();
-    await drag({ x: start.x + start.width / 2, y: start.y + 60 }, { x: start.x + start.width / 2 + 7, y: next.y + next.height + 53 });
+    await drag({ x: start.x + start.width / 2, y: start.y + start.height * .4 }, { x: start.x + start.width / 2 + 7, y: start.y + start.height * .4 + (next.y - start.y) * 2 }, async () => {
+      await page.waitForTimeout(250);
+      const lifted = await cardLift(fixture.pcb);
+      assert.ok(lifted.shadow[0] > selectedLift.shadow[0] && lifted.shadow[1] > selectedLift.shadow[1] && lifted.face[1] < selectedLift.face[1], 'dragging increases physical separation between card and shadow');
+    });
     assert.equal((await workspace()).tasks.find(task => task.id === fixture.pcb).row, 2, 'card snaps to a free row');
     await page.locator('#fit-graph').click(); await page.waitForTimeout(300);
+    await revealCards(fixture.origin, fixture.pcb);
     const edge = page.locator(`.dg-edge-handle[data-edge-key="${fixture.origin}:${fixture.pcb}"][data-endpoint="target"]`);
     const edgePoint = await center(edge);
     await page.mouse.move(edgePoint.x, edgePoint.y); await page.waitForTimeout(100);
@@ -322,12 +556,14 @@ test('transparent Electron UI: direct manipulation, keyboard capture and durable
     assert.ok(!(await workspace()).links.some(link => link.sourceId === fixture.origin && link.targetId === fixture.pcb), 'dragging an endpoint into empty space disconnects');
     await page.locator('#undo').click();
     assert.ok((await workspace()).links.some(link => link.sourceId === fixture.origin && link.targetId === fixture.pcb), 'undo restores disconnected edge');
+    await revealCards(fixture.origin, fixture.merge);
     await drag(await center(edge), await center(card(fixture.merge).locator('[data-port="in"]')));
     assert.ok((await workspace()).links.some(link => link.sourceId === fixture.origin && link.targetId === fixture.merge), 'dragging an endpoint onto a new card rewires');
     assert.ok(!(await workspace()).links.some(link => link.sourceId === fixture.origin && link.targetId === fixture.pcb));
     await page.locator('#undo').click();
     assert.ok((await workspace()).links.some(link => link.sourceId === fixture.origin && link.targetId === fixture.pcb), 'one undo restores the entire rewire');
     await page.locator('#fit-graph').click(); await page.waitForTimeout(350);
+    await revealCards(fixture.pcb, fixture.merge);
     const columnsBeforeAppend = (await workspace()).columns.length;
     const appendStart = await card(fixture.pcb).boundingBox();
     const appendTarget = await page.locator('.dg-new-column').boundingBox();
@@ -344,39 +580,116 @@ test('transparent Electron UI: direct manipulation, keyboard capture and durable
     await page.locator('#undo').click();
     assert.equal((await workspace()).columns.length, columnsBeforeAppend, 'one undo restores the move and appended time slice');
     assert.equal((await workspace()).tasks.find(task => task.id === fixture.pcb).column, 1);
-    await page.locator('#new-task').click();
-    const compact = await page.locator('#composer').evaluate(element => {
-      const graphCard = document.querySelector('.dg-task-card'), style = getComputedStyle(element), graphStyle = getComputedStyle(graphCard);
-      return { width: element.offsetWidth, height: element.offsetHeight, sharedWidth: style.width === graphStyle.width, sharedSurface: style.backgroundImage === graphStyle.backgroundImage && style.borderRadius === graphStyle.borderRadius };
+    const captureStarted = Date.now();
+    await page.evaluate(() => window.deskghost.invoke('hide'));
+    await waitScene(false);
+    await page.evaluate(() => window.deskghost.invoke('summon', { mode: 'create' }));
+    const enlarged = await page.locator('#detail-card').evaluate(element => {
+      const box = element.getBoundingClientRect();
+      return { width: element.offsetWidth, ratio: box.width / box.height, centered: Math.abs(box.left + box.width / 2 - innerWidth / 2) < 2,
+        titleOnCard: element.contains(document.getElementById('task-title')), descriptionOnCard: element.contains(document.getElementById('task-description')),
+        detailsOnBack: ['task-notes', 'detail-id', 'detail-created'].every(id => document.getElementById('detail-back').contains(document.getElementById(id))),
+        managerInert: document.getElementById('manager').inert };
     });
-    assert.equal(compact.width, 266); assert.ok(compact.height < 350);
-    assert.equal(compact.sharedWidth, true); assert.equal(compact.sharedSurface, true);
+    assert.ok(enlarged.width > graphGeometry.cardWidth, 'the editor enlarges the graph card');
+    assert.ok(Math.abs(enlarged.ratio - 621.3463 / 457.9779) < .001, 'the enlarged card preserves the artwork body aspect ratio');
+    assert.equal(enlarged.centered, true, 'the carried card is centered in front of the desktop');
+    assert.equal(enlarged.titleOnCard && enlarged.descriptionOnCard && enlarged.detailsOnBack, true);
+    assert.equal(enlarged.managerInert, true, 'the hidden graph cannot intercept editor input');
+    assert.equal(await page.locator('#desk-scene').getAttribute('data-open'), 'false', 'shortcut capture keeps the board rolled away');
+    assert.equal(await page.locator('#detail-panel').count(), 0, 'details belong to the card back');
+    assert.equal(await page.locator('#task-state, #detail-column, #composer-eyebrow, #close-composer, #detail-actions, #detail-save-status, #composer-hint').count(), 0, 'the card has no redundant state selector, stage label or editor notices');
+    assert.equal(await page.locator('#card-grip > span').count(), 6, 'the six-dot grip marks the card as a physical object');
+    const frontHeads = await page.locator('#front-tags .dg-paper-tag').evaluateAll(tags => tags.map(tag => {
+      const surface = tag.closest('.dg-card-surface').getBoundingClientRect(), box = tag.getBoundingClientRect();
+      return { protrusion: (surface.left - box.left) / surface.width, labelHidden: getComputedStyle(tag.querySelector('.dg-paper-tag-label')).visibility === 'hidden' };
+    }));
+    assert.ok(frontHeads.every(tag => tag.labelHidden && Math.abs(tag.protrusion - .075) < .002), 'both front tags expose only the same fixed colour head on the left');
+    await flipCard('front');
+    assert.equal(await page.locator('#task-title').evaluate(element => element.tagName), 'INPUT');
+    await page.locator('#task-title').fill('First line\nsecond line');
+    const pastedTitle = await page.locator('#task-title').inputValue();
+    assert.doesNotMatch(pastedTitle, /[\r\n]/, 'pasted title lines stay saveable');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.locator('#task-title').inputValue(), pastedTitle, 'Enter does not insert unsupported title controls');
+    assert.equal(await page.locator('#submit-task').isVisible(), true, 'ordinary Enter does not finish the card before Ctrl+Enter field navigation');
+    await page.locator('#task-title').fill('A longer title that must remain entirely readable within the brown ribbon without scrolling');
+    const longTitle = await page.locator('#task-title').evaluate(input => ({ size: parseFloat(getComputedStyle(input).fontSize), width: input.clientWidth, scrollWidth: input.scrollWidth, height: input.clientHeight, scrollHeight: input.scrollHeight, overflowY: getComputedStyle(input).overflowY }));
+    assert.ok(longTitle.scrollWidth <= longTitle.width + 1 && longTitle.scrollHeight <= longTitle.height + 1, 'the complete title fits without either scrollbar');
+    assert.ok(['hidden', 'clip'].includes(longTitle.overflowY), 'title overflow never exposes a vertical scrollbar');
+    await page.locator('#task-title').fill('Idea');
+    assert.ok(await page.locator('#task-title').evaluate(input => parseFloat(getComputedStyle(input).fontSize)) > longTitle.size, 'shortening the title restores the larger lettering');
     await page.locator('#task-title').fill('键盘捕捉灵感'); await page.keyboard.press('Control+Enter');
-    assert.equal(await page.locator('#task-category').evaluate(el => el === document.activeElement), true);
+    assert.equal(await page.locator('#tag-query').evaluate(el => el === document.activeElement), true);
+    const choices = await page.locator('#tag-picker').evaluate(element => {
+      const style = getComputedStyle(element), tags = [...element.querySelectorAll('#tag-options .dg-paper-tag')].map(tag => tag.getBoundingClientRect());
+      return { background: style.backgroundColor, shadow: style.boxShadow, stacked: tags.every((box, index) => index === 0 || box.top >= tags[index - 1].bottom - 1), aligned: tags.every(box => Math.abs(box.left - tags[0].left) < 2) };
+    });
+    assert.equal(choices.background, 'rgba(0, 0, 0, 0)'); assert.equal(choices.shadow, 'none', 'tag choices have no separate backing board');
+    assert.equal(choices.stacked && choices.aligned, true, 'loose tag choices form a vertical stack');
     await page.keyboard.type('交互设计'); await page.keyboard.press('Control+Enter');
+    await page.waitForFunction(() => document.getElementById('tag-picker').hidden);
+    assert.equal(await page.locator('#task-category').inputValue(), '交互设计', 'a keyboard tag query creates the category');
     assert.equal(await page.locator('#task-description').evaluate(el => el === document.activeElement), true);
     await page.keyboard.type('无边框、透明、丝滑吸附');
-    await page.waitForTimeout(6000);
-    const flockAtCard = await page.locator('#flock').evaluate(canvas => {
-      const box = document.getElementById('composer').getBoundingClientRect();
-      const scale = canvas.width / innerWidth;
-      const { data, width, height } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
-      let total = 0, near = 0;
-      for (let y = 0; y < height; y += 2) for (let x = 0; x < width; x += 2) {
-        const alpha = data[(y * width + x) * 4 + 3];
-        total += alpha;
-        if (x / scale > box.left - 80 && x / scale < box.right + 80 && y / scale > box.top - 80 && y / scale < box.bottom + 80) near += alpha;
-      }
-      return total > 0 && near / total > .8;
-    });
-    assert.equal(flockAtCard, true, 'white fragments converge around the input card while it remains usable');
-    await page.screenshot({ path: path.join(output, 'composer-transparent.png'), omitBackground: true });
-    await page.keyboard.press('Control+Enter'); await page.waitForFunction(() => document.getElementById('composer').hidden);
+    await page.locator('#composer-sticker .dg-sticker-button').focus();
+    await page.keyboard.press('ArrowUp');
+    await page.waitForFunction(() => { const sticker = document.querySelector('#composer-sticker .dg-sticker-button'); return sticker.dataset.state === 'Stopped' && !sticker.hasAttribute('aria-busy'); });
+    const quickNotes = '初次记录的备注\n保留完整详情。';
+    await writeNote(quickNotes);
+    const backTagWidths = await page.locator('#back-tags .dg-paper-tag').evaluateAll(tags => tags.map(tag => tag.getBoundingClientRect().width));
+    assert.notEqual(Math.round(backTagWidths[0]), Math.round(backTagWidths[1]), 'back tag lengths follow their different label contents');
+    await page.screenshot({ path: path.join(output, 'composer-back-note.png'), omitBackground: true });
+    await flipCard('front');
+    await page.locator('#task-description').focus();
+    assert.equal(await hasFragments(), false, 'desktop keycaps stop rendering while the leather card editor is open');
+    await page.screenshot({ path: path.join(output, 'composer-front.png'), omitBackground: true });
+    const tasksBeforePlacement = (await workspace()).tasks.length;
+    await page.keyboard.press('Control+Enter');
+    assert.equal(await page.locator('#card-grip').evaluate(element => element === document.activeElement), true, 'Done hands the finished card to its grip');
+    assert.equal(await page.locator('#composer').isVisible(), true);
+    assert.equal((await workspace()).tasks.length, tasksBeforePlacement, 'Done leaves the physical card unplaced and does not create a task yet');
+    assert.equal(await page.locator('#desk-scene').getAttribute('data-open'), 'false');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.getElementById('composer').hidden);
+    await waitScene(true);
     assert.ok((await workspace()).tasks.some(task => task.title === '键盘捕捉灵感' && task.category === '交互设计'));
     const quickTask = (await workspace()).tasks.find(task => task.title === '键盘捕捉灵感');
+    assert.equal(quickTask.notes, quickNotes, 'creation saves the separate notes field');
+    assert.equal(quickTask.state, 'Stopped', 'the initial sticker state is saved with the placed card');
+    assert.ok(Date.parse(quickTask.createdAt) >= captureStarted - 1000 && Date.parse(quickTask.createdAt) <= Date.now() + 1000, 'new cards receive an actual creation timestamp');
     assert.equal(quickTask.column, (await workspace()).columns.length - 1, 'independent quick capture goes into the latest logical column');
+    // A second card follows the pointer path, then is recycled and undone so
+    // this interaction does not add fixture data to the later history checks.
+    await page.locator('#new-task').click();
+    await page.locator('#task-title').fill('Place by hand');
+    await page.locator('#submit-task').click();
+    const grip = await center(page.locator('#card-grip'));
+    await page.mouse.move(grip.x, grip.y); await page.mouse.down();
+    await page.mouse.move(grip.x + 18, grip.y + 24, { steps: 4 });
+    await waitScene(true);
+    const placementBoard = await page.locator('#graph-board').boundingBox();
+    await page.mouse.move(placementBoard.x + placementBoard.width / 2, placementBoard.y + placementBoard.height * .48, { steps: 22 });
+    const placementPreview = await page.locator('.dg-snap-ghost').evaluate((element, geometry) => {
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+      return { valid: !element.hidden && !element.classList.contains('is-invalid'), column: Math.round(matrix.m41 / geometry.columnStep), row: Math.round((matrix.m42 - geometry.top) / geometry.rowStep) };
+    }, graphGeometry);
+    assert.equal(placementPreview.valid, true, 'carrying a card opens a valid snap preview on the board');
+    assert.equal((await workspace()).tasks.length, tasksBeforePlacement + 1, 'drag preview does not persist before release');
+    await page.mouse.up();
+    await page.waitForFunction(() => document.getElementById('composer').hidden);
+    const placedByHand = (await workspace()).tasks.find(task => task.title === 'Place by hand');
+    assert.ok(placedByHand);
+    assert.deepEqual([placedByHand.column, placedByHand.row], [placementPreview.column, placementPreview.row], 'release commits exactly the previewed slice and row');
+    await revealCards(placedByHand.id);
+    await drag(await center(card(placedByHand.id).locator('.dg-card-description')), await center(page.locator('#task-trash')));
+    assert.ok((await workspace()).tasks.find(task => task.id === placedByHand.id).deletedAt, 'graph cards can be dragged directly to the recycling bin');
+    await page.locator('#undo').click();
+    assert.ok(!(await workspace()).tasks.find(task => task.id === placedByHand.id).deletedAt, 'recycling remains recoverable');
+    await page.locator('#undo').click();
+    assert.equal((await workspace()).tasks.length, tasksBeforePlacement + 1, 'undo placement removes only the temporary card');
     await page.locator('#fit-graph').click(); await page.waitForTimeout(350);
-    await drag(await center(card(fixture.merge).locator('[data-port="out"]')), await center(card(quickTask.id).locator('[data-port="in"]')));
+    await connect(fixture.merge, quickTask.id);
     assert.ok((await workspace()).links.some(link => link.sourceId === fixture.merge && link.targetId === quickTask.id), 'quick-created card can be attached after an existing task');
     assert.equal((await workspace()).tasks.find(task => task.id === quickTask.id).column, 3, 'connection moves the earlier card after its source');
     await page.locator('#undo').click();
@@ -384,7 +697,21 @@ test('transparent Electron UI: direct manipulation, keyboard capture and durable
     assert.ok(!(await workspace()).links.some(link => link.targetId === quickTask.id), 'one undo restores the card position and links');
     await page.locator('#redo').click();
     assert.equal((await workspace()).tasks.find(task => task.id === quickTask.id).column, 3);
-    await page.locator('#open-search').click(); await page.locator('#search-title').fill('算法');
+    const categoryColor = await card(quickTask.id).locator('.dg-paper-tag[data-tag="category"]').evaluate(element => element.style.getPropertyValue('--tag-color'));
+    await card(quickTask.id).locator('.dg-note-clip').click();
+    await flipCard('back');
+    assert.equal(await page.locator('#task-notes').inputValue(), quickNotes, 'the graph clip opens the existing note on the card back');
+    assert.equal(await page.locator('#back-tags .dg-paper-tag[data-tag="category"]').evaluate(element => element.style.getPropertyValue('--tag-color')), categoryColor, 'tag color stays consistent between graph and editor');
+    await finishEditor();
+    await clickTagHead(card(quickTask.id).locator('.dg-paper-tag[data-tag="category"]'));
+    await page.waitForFunction(() => !document.getElementById('tag-picker').hidden);
+    await page.locator('#tag-query').fill('交互');
+    assert.equal(await page.locator('#tag-options .dg-paper-tag').count(), 1);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.getElementById('tag-picker').hidden);
+    assert.equal(await page.locator('#task-category').inputValue(), '交互设计', 'the graph tag opens a searchable category picker');
+    await finishEditor();
+    await page.locator('#open-search').click(); await page.locator('#search-title').fill('Algorithm');
     assert.equal(await page.locator('.search-result').count(), 1);
     await page.locator('.search-result').click();
     await page.locator('#clear-search').click();
@@ -392,16 +719,7 @@ test('transparent Electron UI: direct manipulation, keyboard capture and durable
     await page.locator('#category-mode').click(); await page.waitForTimeout(250);
     await page.locator('#graph-mode').click(); await page.locator('#fit-graph').click();
     await page.waitForTimeout(3500);
-    await page.screenshot({ path: path.join(output, 'graph-transparent.png'), omitBackground: true });
-    // A test-only desktop backdrop makes translucent white fragments and cards
-    // easy to inspect; production keeps the genuine desktop visible instead.
-    await page.evaluate(() => {
-      const desktop = document.createElement('div'); desktop.id = 'test-desktop';
-      Object.assign(desktop.style, { position: 'fixed', inset: '0', zIndex: '-1', background: 'radial-gradient(ellipse at 24% 24%,#aaa69a,transparent 60%),linear-gradient(135deg,#7a837f,#465c62 62%,#273d48)' });
-      document.body.prepend(desktop);
-    });
-    await page.screenshot({ path: path.join(output, 'graph-desktop-preview.png') });
-    await page.evaluate(() => document.getElementById('test-desktop').remove());
+    await page.screenshot({ path: path.join(output, 'graph-leather-scene.png'), omitBackground: true });
     await page.evaluate(() => window.deskghost.invoke('hide'));
     await page.evaluate(() => window.deskghost.invoke('summon', { mode: 'ready' }));
     await page.waitForFunction(() => document.body.dataset.mode === 'ready');
@@ -413,19 +731,106 @@ test('transparent Electron UI: direct manipulation, keyboard capture and durable
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => document.body.dataset.mode === 'idle');
     await page.evaluate(() => window.deskghost.invoke('summon', { mode: 'graph' }));
+    await revealCards(fixture.algorithm);
+    const originalCreatedAt = (await workspace()).tasks.find(task => task.id === fixture.algorithm).createdAt;
+    assert.ok(Number.isFinite(Date.parse(originalCreatedAt)));
+    await card(fixture.algorithm).evaluate(element => { window.testOriginalCard = element; });
+    const restingCard = await card(fixture.algorithm).boundingBox();
     await card(fixture.algorithm).dblclick();
+    assert.equal(await page.locator('#detail-card').isVisible(), true, 'double-click opens the card editor');
+    assert.equal(await card(fixture.algorithm).evaluate(element => element.classList.contains('is-lifted') && element.inert && getComputedStyle(element).visibility === 'hidden'), true, 'the original graph card is lifted out while it is in front of the camera');
+    assert.equal(await page.locator('#manager').evaluate(element => element.inert), true);
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => document.getElementById('composer').hidden);
+    assert.equal(await card(fixture.algorithm).evaluate(element => element === window.testOriginalCard && !element.inert && getComputedStyle(element).visibility === 'visible'), true, 'Esc returns the original graph node instead of inserting a duplicate card');
+    const returnedCard = await card(fixture.algorithm).boundingBox();
+    assert.ok(Math.abs(returnedCard.x - restingCard.x) < 1 && Math.abs(returnedCard.y - restingCard.y) < 1 && returnedCard.width === restingCard.width, 'the returned card lands back in its original place at the original scale');
+    await page.evaluate(() => { delete window.testOriginalCard; });
+    await card(fixture.algorithm).dblclick();
+    await flipCard('back');
+    assert.equal((await page.locator('#detail-id').textContent()).trim(), fixture.algorithm);
+    assert.equal(await page.locator('#detail-column').count(), 0);
+    assert.equal(await page.locator('#detail-id').evaluate(element => getComputedStyle(element).textOverflow !== 'ellipsis' && element.scrollWidth <= element.clientWidth + 1), true, 'immutable ID remains complete instead of being replaced by an ellipsis');
+    assert.equal(await page.locator('#detail-created').getAttribute('title'), originalCreatedAt, 'details show the actual saved creation time');
+    const editedNotes = '收起前的独立备注\n备注与卡片描述分别保存。';
+    await writeNote(editedNotes);
+    await flipCard('front');
     await page.locator('#task-description').fill('立即收起时也要保存的编辑');
-    await page.locator('#hide-manager').click();
+    await page.locator('#scene-ring').click();
     await page.waitForFunction(() => document.body.dataset.mode === 'idle');
     assert.equal((await workspace()).tasks.find(task => task.id === fixture.algorithm).description, '立即收起时也要保存的编辑', 'hiding drains pending edits');
+    assert.equal((await workspace()).tasks.find(task => task.id === fixture.algorithm).notes, editedNotes, 'hiding drains pending notes too');
+    assert.equal((await workspace()).tasks.find(task => task.id === fixture.algorithm).createdAt, originalCreatedAt, 'editing keeps the original creation time');
     await page.evaluate(() => window.deskghost.invoke('summon', { mode: 'graph' }));
+    await revealCards(fixture.algorithm);
     await card(fixture.algorithm).dblclick();
+    await flipCard('back');
+    assert.equal(await page.locator('#task-notes').inputValue(), editedNotes, 'reopening restores the separate notes field');
+    await flipCard('front');
     await page.locator('#task-description').fill('删除前最后一次编辑');
-    await card(fixture.algorithm).locator('.dg-delete-action').click();
+    const editGrip = await center(page.locator('#card-grip'));
+    await page.mouse.move(editGrip.x, editGrip.y); await page.mouse.down();
+    await page.mouse.move(editGrip.x + 18, editGrip.y + 24, { steps: 4 });
+    await dragToTrash();
     await page.waitForFunction(() => document.getElementById('composer').hidden);
     assert.ok((await workspace()).tasks.find(task => task.id === fixture.algorithm).deletedAt);
     await page.locator('#undo').click();
-    assert.equal((await workspace()).tasks.find(task => task.id === fixture.algorithm).description, '删除前最后一次编辑', 'direct deletion commits and closes an editor; undo preserves the last edit');
+    assert.equal((await workspace()).tasks.find(task => task.id === fixture.algorithm).description, '删除前最后一次编辑', 'recycling an enlarged card commits its last edit before removal, and undo preserves it');
+    const migration = await page.evaluate(async workspaceId => {
+      const response = await window.deskghost.invoke('createWorkspace', { name: 'Transfer target' });
+      const id = response.activeWorkspaceId;
+      await window.deskghost.invoke('activateWorkspace', { workspaceId });
+      return { id };
+    }, fixture.workspaceId);
+    await page.locator('#fit-graph').click(); await page.waitForTimeout(350);
+    const beforeTransfer = await snapshot();
+    const originalWorkspace = beforeTransfer.documents.find(doc => doc.id === fixture.workspaceId).workspace;
+    const targetWorkspace = beforeTransfer.documents.find(doc => doc.id === migration.id).workspace;
+    const requestTransfer = async () => {
+      if (await page.locator('#composer').evaluate(element => element.hidden)) { await revealCards(quickTask.id); await clickTagHead(card(quickTask.id).locator('.dg-paper-tag[data-tag="workspace"]')); }
+      else await clickTagHead(page.locator('#front-tags .dg-paper-tag[data-tag="workspace"]'));
+      await page.waitForFunction(() => !document.getElementById('tag-picker').hidden);
+      await page.locator('#tag-query').fill('Transfer target');
+      assert.equal(await page.locator('#tag-options .dg-paper-tag').count(), 1);
+      await page.keyboard.press('Enter');
+      await page.locator('#transfer-prompt').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('#composer').evaluate(element => element.inert), true, 'confirmation isolates the pending card');
+    };
+    await requestTransfer();
+    assert.equal(await page.locator('#cancel-transfer').evaluate(element => element === document.activeElement), true, 'migration defaults to the cancel key');
+    assert.equal(await page.locator('#confirm-transfer .well .plunger .cap, #cancel-transfer .well .plunger .cap').count(), 2, 'confirmation uses the same physical keys');
+    await page.locator('#cancel-transfer').click();
+    await page.waitForFunction(() => document.getElementById('transfer-prompt').hidden);
+    const cancelledTransfer = await snapshot();
+    assert.deepEqual(cancelledTransfer.documents.find(doc => doc.id === fixture.workspaceId).workspace, originalWorkspace, 'cancel keeps the original card and links unchanged');
+    assert.deepEqual(cancelledTransfer.documents.find(doc => doc.id === migration.id).workspace, targetWorkspace, 'cancel does not write into the destination');
+    assert.equal(cancelledTransfer.activeWorkspaceId, fixture.workspaceId);
+    await requestTransfer();
+    await page.locator('#confirm-transfer').click();
+    await page.waitForFunction(() => document.getElementById('transfer-prompt').hidden);
+    const transferred = await snapshot();
+    const sourceAfterTransfer = transferred.documents.find(doc => doc.id === fixture.workspaceId).workspace;
+    const targetAfterTransfer = transferred.documents.find(doc => doc.id === migration.id).workspace;
+    const moved = targetAfterTransfer.tasks.find(task => task.id === quickTask.id);
+    assert.equal(transferred.activeWorkspaceId, migration.id);
+    assert.ok(moved, 'the selected card appears in the destination workspace');
+    const { column: oldColumn, row: oldRow, ...originalContents } = originalWorkspace.tasks.find(task => task.id === quickTask.id);
+    const { column: newColumn, row: newRow, ...movedContents } = moved;
+    assert.deepEqual(movedContents, originalContents, 'migration preserves ID, creation date, notes, state and archive history');
+    assert.equal(newColumn, targetAfterTransfer.columns.length - 1);
+    assert.deepEqual(sourceAfterTransfer.tasks, originalWorkspace.tasks.filter(task => task.id !== quickTask.id), 'migration moves only the selected card');
+    assert.deepEqual(sourceAfterTransfer.links, originalWorkspace.links.filter(link => link.sourceId !== quickTask.id && link.targetId !== quickTask.id), 'migration removes only the selected card\'s incident links');
+    assert.deepEqual(targetAfterTransfer.links, targetWorkspace.links, 'migration does not recreate source links in another workspace');
+    assert.ok(targetAfterTransfer.categories.includes(quickTask.category));
+    await finishEditor();
+    await page.locator('#undo').click();
+    assert.deepEqual((await workspace()).tasks, originalWorkspace.tasks);
+    assert.deepEqual((await workspace()).links, originalWorkspace.links, 'one migration undo restores the original path');
+    assert.deepEqual((await snapshot()).documents.find(doc => doc.id === migration.id).workspace.tasks, targetWorkspace.tasks);
+    await page.locator('#redo').click();
+    assert.ok(!(await workspace()).tasks.some(task => task.id === quickTask.id));
+    assert.equal((await snapshot()).documents.find(doc => doc.id === migration.id).workspace.tasks.find(task => task.id === quickTask.id).notes, quickNotes);
+    await page.evaluate(workspaceId => window.deskghost.invoke('activateWorkspace', { workspaceId }), fixture.workspaceId);
     await page.evaluate(() => {
       window.testActivations = [];
       window.stopActivationProbe = window.deskghost.onEvent(event => { if (event.type === 'summon') window.testActivations.push(event.activationId); });
@@ -474,7 +879,9 @@ test('transparent Electron UI: direct manipulation, keyboard capture and durable
     assert.equal(composition, true, 'composition uses the same focused title');
     await page.keyboard.press('Control+Enter');
     await app.evaluate(({ BrowserWindow }, activationId) => BrowserWindow.getAllWindows()[0].webContents.send('deskghost:event', { type: 'inputFocus', mode: 'ready', activationId, active: true }), await page.evaluate(() => window.testActivations.at(-1)));
-    assert.equal(await page.locator('#task-category').evaluate(input => input === document.activeElement), true, 'old focus notifications do not interrupt the next field');
+    assert.equal(await page.locator('#tag-query').evaluate(input => input === document.activeElement), true, 'old focus notifications do not interrupt the category picker');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => document.getElementById('tag-picker').hidden);
     await page.keyboard.press('Escape');
     await page.evaluate(() => { window.stopActivationProbe(); delete window.stopActivationProbe; delete window.testActivations; });
     await context.test('Windows click and keyboard delivery with focus emulation disabled', async nativeTest => {
@@ -577,19 +984,42 @@ if ($clicked) { $typed = [DeskGhostKeyboardCheck]::Type(${target.handle}, ${targ
         await page.waitForFunction(() => document.getElementById('task-title').value === 'native first', null, { timeout: 1500 });
       } finally {
         await app.evaluate(({ screen }) => { if (globalThis.testNativeCursor) { screen.getCursorScreenPoint = globalThis.testNativeCursor; delete globalThis.testNativeCursor; } });
-        await page.evaluate(() => { if (!document.getElementById('composer').hidden) document.getElementById('close-composer').click(); });
+        await page.evaluate(() => { if (!document.getElementById('composer').hidden) document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
         await page.evaluate(() => window.deskghost.invoke('hide'));
         await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
         await cdp.detach();
       }
     });
     assert.deepEqual(errors, []);
+    const sceneFrames = await page.evaluate(() => { window.stopSceneProbe(); const frames = window.testSceneFrames; delete window.stopSceneProbe; delete window.testSceneFrames; return frames; });
+    assert.ok(sceneFrames.length > 10, 'the board motion was sampled during real opening and closing');
+    assert.ok(sceneFrames.every(frame => Math.abs(frame.scaleX - 1) < .001 && Math.abs(frame.scaleY - 1) < .001 && frame.opacity === 1 && Math.abs(frame.x) < .1), 'the rigid leather board only translates, without scaling or fading');
+    assert.ok(sceneFrames.some(frame => frame.y < -5), 'the ring lifts above the hook before settling or unhooking');
     const final = await snapshot();
     const file = final.documents.find(doc => doc.id === fixture.workspaceId).path;
     const stored = JSON.parse(await fs.readFile(file, 'utf8'));
-    assert.equal(stored.tasks.length, 5);
+    const migratedFile = final.documents.find(doc => doc.id === migration.id).path;
+    const migratedStored = JSON.parse(await fs.readFile(migratedFile, 'utf8'));
+    assert.equal(stored.tasks.length, 4);
+    assert.equal(migratedStored.tasks.length, 1);
+    assert.equal(migratedStored.tasks.find(task => task.id === quickTask.id).notes, quickNotes);
+    assert.equal(migratedStored.tasks.find(task => task.id === quickTask.id).createdAt, quickTask.createdAt);
+    assert.equal(stored.tasks.find(task => task.id === fixture.algorithm).notes, editedNotes);
+    assert.equal(stored.tasks.find(task => task.id === fixture.algorithm).createdAt, originalCreatedAt);
     console.log('Desktop screenshots and workspace:', output);
     await page.evaluate(() => window.deskghost.invoke('quit')).catch(() => {});
+  } catch (error) {
+    console.log('Desktop failure artifacts:', output, 'Renderer errors:', errors, 'Failure:', error.message);
+    const page = await app.firstWindow().catch(() => null);
+    if (page) {
+      await page.screenshot({ path: path.join(output, 'failure.png'), omitBackground: true }).catch(() => {});
+      console.log('Desktop failure state:', await page.evaluate(() => ({ mode: document.body.dataset.mode, focus: document.activeElement?.id, composerHidden: document.getElementById('composer').hidden, scene: document.getElementById('desk-scene').dataset, error: document.getElementById('composer-error').textContent, toast: document.getElementById('toast').textContent })).catch(() => null));
+    }
+    // An unfinished test draft intentionally vetoes an ordinary app quit. This
+    // process owns only the fresh output directory, so finish its failed run
+    // directly instead of leaving a test window waiting for user interaction.
+    await app.evaluate(({ app }) => app.exit()).catch(() => {});
+    throw error;
   } finally {
     await app.evaluate(({ powerMonitor }) => { if (globalThis.testActualIdleTime) powerMonitor.getSystemIdleTime = globalThis.testActualIdleTime; }).catch(() => {});
     await app.close().catch(() => {});

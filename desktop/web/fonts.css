@@ -1,0 +1,50 @@
+@font-face {
+  font-family: 'Bungee';
+  src: url('./assets/fonts/Bungee-Regular.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Teko';
+  src: url('./assets/fonts/Teko-Variable.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+}
+
+/* Smiley Sans has an oblique drawing; do not synthesize another italic slant. */
+@font-face {
+  font-family: 'Smiley Sans';
+  src: url('./assets/fonts/SmileySans-Oblique.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+/* BankGothic is used only when the user already has a licensed local copy. */
+@font-face {
+  font-family: 'BankGothic Local';
+  src: local('BankGothic Lt BT Light'), local('BankGothic Lt BT'), local('BankGothicBT-Light'), local('BankGothic-Light');
+  font-style: normal;
+  font-weight: 300 400;
+  font-display: swap;
+}
+
+/* A bundled geometric fallback; Orbitron is not the original BankGothic face. */
+@font-face {
+  font-family: 'Orbitron';
+  src: url('./assets/fonts/Orbitron-Regular.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  --font-heading: 'Bungee', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --font-body: 'Teko', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --font-tag: 'Smiley Sans', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --font-note: 'Teko', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --font-metadata: 'BankGothic Local', 'Orbitron', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+}

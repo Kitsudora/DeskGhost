@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="419.118" height="232.955" viewBox="0 0 419.118 232.955">
+  <rect x="45.234" y="7.667" width="373.884" height="225.288" rx="5.302" ry="5.302" style="fill: #c7b781;"/>
+  <rect x="50.06" y="12.153" width="364.232" height="216.315" rx="5.302" ry="5.302" style="fill: #decc90;"/>
+  <g>
+    <line x1="74.772" y1="55.043" x2="389.58" y2="55.043" style="fill: none; stroke: #948a69; stroke-miterlimit: 10;"/>
+    <line x1="74.772" y1="87.213" x2="389.58" y2="87.213" style="fill: none; stroke: #948a69; stroke-miterlimit: 10;"/>
+    <line x1="74.772" y1="119.383" x2="389.58" y2="119.383" style="fill: none; stroke: #948a69; stroke-miterlimit: 10;"/>
+    <line x1="74.772" y1="151.553" x2="389.58" y2="151.553" style="fill: none; stroke: #948a69; stroke-miterlimit: 10;"/>
+    <line x1="74.772" y1="183.723" x2="389.58" y2="183.723" style="fill: none; stroke: #948a69; stroke-miterlimit: 10;"/>
+    <line x1="74.772" y1="215.894" x2="389.58" y2="215.894" style="fill: none; stroke: #948a69; stroke-miterlimit: 10;"/>
+  </g>
+</svg>

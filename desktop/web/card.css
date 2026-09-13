@@ -1,0 +1,234 @@
+/* Geometry is taken from assets/SVG/card_example_done.svg, relative to its body.
+   The SVG includes the ribbon's return and the complete offset shadow silhouette. */
+:root {
+  --task-card-width: 310px;
+  --task-card-radius: 10.4855% / 14.226%;
+  --task-card-title-ink: #211f1c;
+  --task-card-text-ink: #3d3a35;
+}
+.dg-card-surface {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 621.3463 / 457.9779;
+  isolation: isolate;
+  container-type: inline-size;
+  overflow: visible;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--task-card-text-ink);
+  border-radius: var(--task-card-radius);
+}
+/* Both sides keep their original SVG canvas and body anchor. Shadows carry
+   the source #363636 / .87 opacity; moving them never changes that material. */
+.dg-card-surface {
+  --card-lift-y: 0px;
+  --card-shadow-x: 0px;
+  --card-shadow-y: 0px;
+  --card-art-left: -12.067055%;
+  --card-art-top: -11.487694%;
+  --card-art-width: 117.127164%;
+  --card-art-height: 113.587577%;
+}
+.dg-card-surface[data-side="back"] {
+  --card-art-left: -7.253926%;
+  --card-art-top: -11.487891%;
+  --card-art-width: 119.319452%;
+}
+.dg-card-shadow, .dg-card-faceart {
+  position: absolute;
+  left: var(--card-art-left);
+  top: var(--card-art-top);
+  width: var(--card-art-width);
+  height: var(--card-art-height);
+  background: 0 0 / 100% 100% no-repeat;
+  pointer-events: none;
+}
+.dg-card-shadow {
+  z-index: -2;
+  background-image: url('./assets/paper/card-front-shadow.svg');
+  translate: var(--card-shadow-x) var(--card-shadow-y);
+  transition: translate .22s cubic-bezier(.2,.8,.2,1);
+}
+.dg-card-faceart { z-index: 0; background-image: url('./assets/paper/card-front.svg'); }
+.dg-card-surface[data-side="back"] > .dg-card-shadow { background-image: url('./assets/paper/card-back-shadow.svg'); }
+.dg-card-surface[data-side="back"] > .dg-card-faceart { background-image: url('./assets/paper/card-back.svg'); }
+.dg-card-surface > :not(.dg-card-shadow) { translate: 0 var(--card-lift-y); transition: translate .22s cubic-bezier(.2,.8,.2,1); }
+.dg-title-ribbon, .dg-card-description, .dg-card-description-input, .dg-card-category { z-index: 1; }
+.dg-title-ribbon {
+  position: absolute;
+  left: 24.35937%;
+  top: 12.86397%;
+  width: 79.14485%;
+  height: 19.73542%;
+  display: flex;
+  align-items: center;
+  padding: 0 5.3% 0 12.5%;
+  min-width: 0;
+}
+.dg-card-title, .dg-card-title-input {
+  width: 100%;
+  margin: 0;
+  color: var(--task-card-title-ink);
+  font-family: var(--font-heading, "Segoe UI", sans-serif);
+  font-size: var(--card-title-size, calc(100cqw * 95 / 621.3463));
+  line-height: 1;
+  font-weight: 400;
+  letter-spacing: -.025em;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+.dg-card-title { display: block; overflow: hidden; text-overflow: clip; }
+.dg-card-description, .dg-card-description-input {
+  position: absolute;
+  left: 10.65%;
+  top: 41.7%;
+  width: 79%;
+  height: 35%;
+  margin: 0;
+  color: var(--task-card-text-ink);
+  font-family: var(--font-body, "Segoe UI", sans-serif);
+  font-size: var(--card-text-size, 5.65cqw);
+  line-height: 1.25;
+  font-weight: 600;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.dg-card-description { overflow: hidden; }
+.dg-card-description.is-placeholder { opacity: .45; }
+.dg-card-title-input, .dg-card-description-input {
+  display: block;
+  padding: 0;
+  min-height: 0;
+  max-height: none;
+  resize: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #b2a48f transparent;
+  user-select: text;
+}
+.dg-card-title-input { height: 1.15em; max-height: 100%; white-space: nowrap; overflow: hidden; scrollbar-width: none; overscroll-behavior: none; }
+.dg-card-title-input::-webkit-scrollbar { display: none; }
+.dg-card-title-input:focus-visible, .dg-card-description-input:focus-visible { outline: 1px dashed #998771; outline-offset: 4px; }
+.dg-card-title-input::placeholder, .dg-card-description-input::placeholder { color: inherit; opacity: .5; }
+.dg-card-category {
+  position: absolute;
+  right: 8%;
+  bottom: 8.3%;
+  max-width: 78%;
+  color: #62594d;
+  font-family: var(--font-heading, "Segoe UI", sans-serif);
+  font-size: var(--card-category-size, 3.1cqw);
+  line-height: 1.3;
+  font-weight: 400;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.dg-sticker-slot { position: absolute; z-index: 3; left: -7.569724%; top: -11.430071%; width: 40.738683%; height: 38.690601%; }
+.dg-sticker-button, .dg-sticker-button:not(:disabled), .dg-sticker-button:active:not(:disabled) {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 45%;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  transition: none;
+  cursor: ew-resize;
+  touch-action: none;
+  -webkit-user-drag: none;
+}
+.dg-sticker-button:disabled { opacity: 1; cursor: default; }
+.dg-sticker-button:focus-visible { outline: 2px dashed #575045; outline-offset: 5px; }
+.dg-sticker-image { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; user-select: none; -webkit-user-drag: none; filter: drop-shadow(1px 2px 1px #3a2d1926); }
+.dg-sticker-button.is-peeling { cursor: grabbing; }
+.dg-sticker-canvas { position: fixed; z-index: 100; pointer-events: none; contain: strict; }
+
+/* Arrow tags sit beneath the face and its shadow. The exposed edge remains
+   directly clickable; their covered portion is not an invisible hit target. */
+.dg-card-tags { position: absolute; z-index: -3; inset: 0; pointer-events: none; }
+.dg-paper-tag {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  max-width: var(--tag-max-width, 100%);
+  height: 1.47433em;
+  flex: none;
+  padding: 0 1.75em 0 .65em;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #363636;
+  font-family: var(--font-tag, var(--font-body, sans-serif));
+  font-size: 20px;
+  font-weight: 400;
+  line-height: 1.1;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.dg-paper-tag::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: var(--tag-color, #c1c5a6);
+  /* Keep the source arrow's 38.31 / 44.23 head geometry as its shaft grows. */
+  clip-path: polygon(0 0, calc(100% - 1.277em) 0, 100% 50%, calc(100% - 1.277em) 100%, 0 100%);
+  pointer-events: none;
+}
+.dg-paper-tag:not(:disabled), .dg-paper-tag:active:not(:disabled) { background: transparent; box-shadow: none; transform: none; }
+.dg-paper-tag:focus-visible { outline: 1px dashed #565046; outline-offset: 2px; }
+.dg-paper-tag-label { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.dg-card-tags > .dg-paper-tag {
+  position: absolute;
+  left: -7.5cqw;
+  top: 35.86%;
+  width: 40cqw;
+  max-width: none;
+  height: 7.118cqw;
+  padding: 0;
+  font-family: var(--font-tag, var(--font-body, sans-serif));
+  font-size: 4.8282cqw;
+  font-weight: 400;
+  line-height: 1.1;
+  clip-path: inset(-2px -2px -2px 32.5cqw);
+}
+.dg-card-tags > .dg-paper-tag, .dg-card-tags > .dg-paper-tag:active:not(:disabled) { transform: scaleX(-1); }
+.dg-card-tags > .dg-paper-tag[data-tag="category"] { top: 47.27%; }
+.dg-card-tags > .dg-paper-tag-label, .dg-card-tags .dg-paper-tag-label { visibility: hidden; }
+.dg-note-clip {
+  position: absolute;
+  z-index: 4;
+  left: 85.986724%;
+  top: 37.306386%;
+  width: 21.267211%;
+  aspect-ratio: 132.143 / 109.923;
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+}
+.dg-note-clip, .dg-note-clip:not(:disabled), .dg-note-clip:active:not(:disabled) { background: transparent; box-shadow: none; transform: scaleX(-1); }
+.dg-note-clip-front, .dg-note-clip-back { position: absolute; inset: 0; background: 0 0 / 100% 100% no-repeat; pointer-events: none; }
+.dg-note-clip-back { background-image: url('./assets/paper/paperclip-back.svg'); clip-path: inset(0 65.89149% 0 0); }
+.dg-note-clip-front { background-image: url('./assets/paper/paperclip-front.svg'); }
+.dg-note-clip:focus-visible { outline: 1px dashed #625a4c; outline-offset: 3px; }
+html[data-effects="off"] .dg-card-surface > *, html[data-effects="off"] .dg-paper-tag { transition: none !important; }
+@media (prefers-reduced-motion: reduce) { .dg-card-surface > *, .dg-paper-tag { transition: none !important; } }

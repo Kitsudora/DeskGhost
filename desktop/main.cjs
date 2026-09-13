@@ -30,7 +30,7 @@ let roaming = false, nextRoamCheck = 0;
 let pendingOperations = 0, operationQueue = Promise.resolve();
 const rescuedSnapshots = new Map();
 const circles = new CircleGestureRecognizer(), speedDismiss = new SpeedDismissRecognizer();
-const mutationMethods = new Set(['createTask', 'updateTask', 'setState', 'moveTask', 'insertColumn', 'renameColumn', 'renameWorkspace', 'addCategory', 'addLink', 'connectTask', 'removeLink', 'rewireLink', 'deleteTask', 'restoreTask', 'archiveTask', 'unarchiveTask', 'undo', 'redo', 'saveWorkspace', 'closeWorkspace', 'activateWorkspace']);
+const mutationMethods = new Set(['createTask', 'updateTask', 'setState', 'moveTask', 'transferTask', 'insertColumn', 'renameColumn', 'renameWorkspace', 'addCategory', 'addLink', 'connectTask', 'removeLink', 'rewireLink', 'deleteTask', 'restoreTask', 'archiveTask', 'unarchiveTask', 'undo', 'redo', 'saveWorkspace', 'closeWorkspace', 'activateWorkspace']);
 
 class CoreBridge {
   constructor() {
@@ -47,32 +47,32 @@ class CoreBridge {
     this.process.stdout.setEncoding('utf8');
     this.process.stdout.on('data', chunk => this.receive(chunk));
     this.process.stderr.on('data', () => {});
-    this.process.once('error', error => this.fail(new Error('无法启动数据服务：' + error.message)));
-    this.process.once('exit', () => { if (!quitting && !this.closed) this.fail(new Error('数据服务已停止。已有磁盘数据仍保留，请重新启动应用。')); });
+    this.process.once('error', error => this.fail(new Error('Cannot start the data service: ' + error.message)));
+    this.process.once('exit', () => { if (!quitting && !this.closed) this.fail(new Error('The data service stopped. Saved files are preserved; restart the app.')); });
     this.process.stdin.on('error', error => this.fail(error));
   }
   receive(chunk) {
     if (this.failed) return;
     this.buffer += chunk;
-    if (Buffer.byteLength(this.buffer, 'utf8') > 20 * 1024 * 1024) { this.fail(new Error('数据服务响应超过上限，已安全停止。')); return; }
+    if (Buffer.byteLength(this.buffer, 'utf8') > 20 * 1024 * 1024) { this.fail(new Error('The data service response exceeded its size limit and was safely stopped.')); return; }
     let newline;
     while ((newline = this.buffer.indexOf('\n')) >= 0) {
       const line = this.buffer.slice(0, newline); this.buffer = this.buffer.slice(newline + 1);
       let reply;
-      try { reply = JSON.parse(line); } catch { this.fail(new Error('数据服务返回了损坏的消息。')); return; }
+      try { reply = JSON.parse(line); } catch { this.fail(new Error('The data service returned a malformed message.')); return; }
       const waiting = this.pending.get(reply.id);
-      if (!waiting) { this.fail(new Error('数据服务请求顺序无效。')); return; }
+      if (!waiting) { this.fail(new Error('The data service returned an unexpected response.')); return; }
       clearTimeout(waiting.timer); this.pending.delete(reply.id);
-      if (reply.ok) waiting.resolve(reply.data); else waiting.reject(new Error(reply.error || '数据操作失败。'));
+      if (reply.ok) waiting.resolve(reply.data); else waiting.reject(new Error(reply.error || 'The data operation failed.'));
     }
   }
   request(method, payload = {}) {
-    if (this.failed) return Promise.reject(new Error('数据服务不可用，请重新启动；已保存的文件仍保留。'));
-    if (this.pending.size >= 4) return Promise.reject(new Error('数据服务繁忙，请稍后重试。'));
+    if (this.failed) return Promise.reject(new Error('The data service is unavailable. Restart the app; saved files are preserved.'));
+    if (this.pending.size >= 4) return Promise.reject(new Error('The data service is busy. Try again shortly.'));
     const id = String(++this.counter), line = JSON.stringify({ id, method, payload }) + '\n';
-    if (Buffer.byteLength(line, 'utf8') > 256 * 1024) return Promise.reject(new Error('操作内容超过允许大小。'));
+    if (Buffer.byteLength(line, 'utf8') > 256 * 1024) return Promise.reject(new Error('The operation exceeds the allowed size.'));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(new Error('数据服务响应超时。已停止继续编辑，磁盘上的有效数据保持不变。')), 30000);
+      const timer = setTimeout(() => this.fail(new Error('The data service timed out. Editing is paused; valid files on disk are unchanged.')), 30000);
       this.pending.set(id, { resolve, reject, timer });
       this.process.stdin.write(line, 'utf8', error => { if (error) this.fail(error); });
     });
@@ -102,14 +102,14 @@ function checkSettings(value) {
   if (!value || value.formatVersion !== 1 || typeof value.dataFolder !== 'string' || !value.dataFolder.trim() || value.dataFolder.length > 1024 || !path.isAbsolute(value.dataFolder) ||
     !['high', 'low', 'off'].includes(value.effects) || typeof value.gestureEnabled !== 'boolean' || ![0, 180, 300, 600].includes(value.idleRoamSeconds) ||
     !Number.isFinite(value.dismissSpeed) || value.dismissSpeed < 0.5 || value.dismissSpeed > 4 ||
-    !Array.isArray(value.openFiles) || value.openFiles.length > 12 || value.openFiles.some(p => typeof p !== 'string' || !path.isAbsolute(p) || p.length > 1024)) throw new Error('设置文件包含无效数据。');
-  for (const key of ['createHotkey', 'graphHotkey']) if (typeof value[key] !== 'string' || !value[key].trim() || value[key].length > 80) throw new Error('全局快捷键无效。');
+    !Array.isArray(value.openFiles) || value.openFiles.length > 12 || value.openFiles.some(p => typeof p !== 'string' || !path.isAbsolute(p) || p.length > 1024)) throw new Error('The settings file contains invalid data.');
+  for (const key of ['createHotkey', 'graphHotkey']) if (typeof value[key] !== 'string' || !value[key].trim() || value[key].length > 80) throw new Error('The global shortcut is invalid.');
   return value;
 }
 async function readJsonBounded(file) {
   const handle = await fsp.open(file, 'r');
   try {
-    if ((await handle.stat()).size > 64 * 1024) throw new Error('设置文件过大。');
+    if ((await handle.stat()).size > 64 * 1024) throw new Error('The settings file is too large.');
     const buffer = Buffer.alloc(64 * 1024 + 1);
     let length = 0;
     while (length < buffer.length) {
@@ -117,7 +117,7 @@ async function readJsonBounded(file) {
       if (!bytesRead) break;
       length += bytesRead;
     }
-    if (length > 64 * 1024) throw new Error('读取期间设置文件超过大小上限。');
+    if (length > 64 * 1024) throw new Error('The settings file exceeded its size limit while being read.');
     return JSON.parse(buffer.subarray(0, length).toString('utf8').replace(/^\uFEFF/, ''));
   }
   finally { await handle.close(); }
@@ -131,7 +131,7 @@ async function loadSettings() {
     }
   } catch (error) {
     settingsInvalid = fs.existsSync(settingsPath); settings = { ...defaults };
-    warningList.push('无法读取设置，使用临时默认值；原文件保持不变。' + error.message);
+    warningList.push('Cannot read settings. Temporary defaults are in use; the original file is unchanged. ' + error.message);
   }
 }
 async function saveSettings(explicit = false, value = settings) {
@@ -151,11 +151,11 @@ async function saveSettings(explicit = false, value = settings) {
 }
 async function rememberOpenFiles() {
   settings.openFiles = lastState.documents.map(d => d.path);
-  try { await saveSettings(); } catch (error) { settingsWarning = '设置保存失败，工作区数据单独保存：' + error.message; }
+  try { await saveSettings(); } catch (error) { settingsWarning = 'Settings could not be saved; workspace data is saved separately: ' + error.message; }
 }
 async function rescueSnapshot(document, destination, adopt) {
   const bytes = Buffer.from(JSON.stringify(document.workspace), 'utf8');
-  if (bytes.length > 16 * 1024 * 1024) throw new Error('恢复快照超过大小上限，已停止导出。');
+  if (bytes.length > 16 * 1024 * 1024) throw new Error('The recovery snapshot exceeds its size limit. Export was stopped.');
   const temporary = destination + '.' + require('node:crypto').randomUUID() + '.rescue.tmp';
   let helper;
   try {
@@ -169,7 +169,7 @@ async function rescueSnapshot(document, destination, adopt) {
       document.canUndo = false; document.canRedo = false;
       await rememberOpenFiles();
     }
-    send({ type: 'error', message: '内存中最后确认的内容已安全导出。数据服务已停止，请重新启动后继续编辑。' });
+    send({ type: 'error', message: 'The last acknowledged in-memory snapshot was exported safely. Restart the app to resume editing.' });
   } finally { helper?.close(); await fsp.unlink(temporary).catch(() => {}); }
 }
 const registered = new Map();
@@ -183,7 +183,7 @@ function setReadyEscape(active) {
 function configureHotkeys(candidate, initial = false) {
   const keys = [candidate.createHotkey, candidate.graphHotkey];
   const canonical = key => key.replace(/\s/g, '').toLowerCase().replace(/control/g, 'ctrl');
-  if (canonical(keys[0]) === canonical(keys[1])) throw new Error('创建任务和任务图必须使用不同快捷键。');
+  if (canonical(keys[0]) === canonical(keys[1])) throw new Error('Task creation and the task graph must use different shortcuts.');
   if (readyEscapeRegistered && keys.some(isEscapeHotkey)) setReadyEscape(false);
   const added = [];
   try {
@@ -193,7 +193,7 @@ function configureHotkeys(candidate, initial = false) {
         if (key === settings.createHotkey) summon('create');
         else if (key === settings.graphHotkey) summon('graph');
       });
-      if (!success) throw new Error('快捷键 ' + key + ' 已被占用，请设置其他组合。');
+      if (!success) throw new Error('Shortcut ' + key + ' is already in use. Choose a different combination.');
       registered.set(key, true); added.push(key);
     }
     for (const key of [...registered.keys()]) if (!keys.includes(key)) { globalShortcut.unregister(key); registered.delete(key); }
@@ -209,9 +209,9 @@ function setInteractive(value) {
 function setRegions(payload) {
   if (mode === 'ready' && !Object.hasOwn(payload ?? {}, 'readyActivation')) return false;
   if (payload && Object.hasOwn(payload, 'readyActivation') && (mode !== 'ready' || payload.readyActivation !== activationId)) return false;
-  if (!payload || !Array.isArray(payload.regions) || payload.regions.length > 80) throw new Error('交互区域无效。');
+  if (!payload || !Array.isArray(payload.regions) || payload.regions.length > 80) throw new Error('The interaction region is invalid.');
   regions = payload.regions.map(rect => {
-    if (!rect || !['x', 'y', 'width', 'height'].every(k => Number.isFinite(rect[k]) && Math.abs(rect[k]) <= 50000) || rect.width < 0 || rect.height < 0) throw new Error('交互区域无效。');
+    if (!rect || !['x', 'y', 'width', 'height'].every(k => Number.isFinite(rect[k]) && Math.abs(rect[k]) <= 50000) || rect.width < 0 || rect.height < 0) throw new Error('The interaction region is invalid.');
     return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
   });
   dragUntil = payload.dragging === true ? Date.now() + 30000 : 0;
@@ -260,7 +260,7 @@ function activateWindow() {
 }
 function summon(nextMode = 'graph', internal = false) {
   if (!win || win.isDestroyed() || !rendererReady) return;
-  if (!['ready', 'create', 'graph'].includes(nextMode)) throw new Error('呼出模式无效。');
+  if (!['ready', 'create', 'graph'].includes(nextMode)) throw new Error('The summon mode is invalid.');
   if (nextMode === 'ready' && mode !== 'idle' && mode !== 'ready') return;
   if (internal && win.isFocusable()) {
     // A real click already activated the renderer. Keep its native/DOM focus
@@ -356,7 +356,7 @@ function pollCursor() {
     // A locked or unavailable desktop must not crash the host or leave the
     // transparent window intercepting another application's mouse input.
     try { setInteractive(false); } catch {}
-    if (cursorFailures === 1) send({ type: 'error', message: '无法读取当前桌面的鼠标位置，手势已降为低频重试；任务编辑和快捷键仍可使用。' });
+    if (cursorFailures === 1) send({ type: 'error', message: 'The desktop pointer position is unavailable. Gesture detection will retry less often; editing and shortcuts remain available.' });
   }
   sampleTimer = setTimeout(pollCursor, delay); sampleTimer.unref();
 }
@@ -387,18 +387,18 @@ async function shutdown() {
   if (quitting) return;
   await startup;
   if (bridge?.failed) {
-    if (lastState.documents.some(document => document.saveStatus !== 'saved' && rescuedSnapshots.get(document.id)?.workspace !== document.workspace)) throw new Error('数据服务已停止，界面中仍有未保存的数据。请逐一导出未保存的工作区后重新启动。');
+    if (lastState.documents.some(document => document.saveStatus !== 'saved' && rescuedSnapshots.get(document.id)?.workspace !== document.workspace)) throw new Error('The data service stopped with unsaved changes. Export each unsaved workspace before restarting.');
     settings.openFiles = lastState.documents.map(document => document.saveStatus !== 'saved' ? rescuedSnapshots.get(document.id).path : document.path);
-    try { await saveSettings(); } catch (error) { settingsWarning = '恢复文件已保存，但设置保存失败：' + error.message; }
+    try { await saveSettings(); } catch (error) { settingsWarning = 'Recovery files were saved, but settings could not be saved: ' + error.message; }
     quitting = true; clearTimeout(sampleTimer); globalShortcut.unregisterAll(); tray?.destroy(); app.quit(); return;
   }
   const value = acceptState(await bridge.request('flush'));
-  if (!value.result?.canExit) { exitRequested = false; summon('graph'); throw new Error('仍有未保存的更改。退出已暂停，请重试保存或另存到可写位置。'); }
+  if (!value.result?.canExit) { exitRequested = false; summon('graph'); throw new Error('There are unsaved changes. Exit is paused; retry saving or save a copy to a writable location.'); }
   await rememberOpenFiles();
   quitting = true; clearTimeout(sampleTimer); globalShortcut.unregisterAll(); bridge.close(); tray?.destroy(); app.quit();
 }
 function validateSender(event) {
-  if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame || event.senderFrame.url !== rendererUrl) throw new Error('拒绝未授权的页面请求。');
+  if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame || event.senderFrame.url !== rendererUrl) throw new Error('An unauthorized page request was rejected.');
 }
 async function invoke(method, payload) {
   await startup;
@@ -410,18 +410,19 @@ async function invoke(method, payload) {
   let result;
   if (mutationMethods.has(method)) {
     result = await bridge.request(method, payload); acceptState(result, false);
+    if (result.result?.error) { acceptState(result); throw new Error(result.result.error); }
     if (method === 'closeWorkspace') await rememberOpenFiles();
   } else if (method === 'createWorkspace') {
     result = await bridge.request(method, { name: payload.name, folder: settings.dataFolder }); acceptState(result, false); await rememberOpenFiles();
   } else if (method === 'openWorkspace' || method === 'recoverWorkspace') {
-    const picked = await dialog.showOpenDialog(win, { title: method === 'recoverWorkspace' ? '选择要从 .bak 恢复的工作区（原文件将保留）' : '打开工作区', defaultPath: settings.dataFolder, filters: [{ name: 'DeskGhost 工作区', extensions: ['json'] }], properties: ['openFile'] });
+    const picked = await dialog.showOpenDialog(win, { title: method === 'recoverWorkspace' ? 'Select a workspace to recover from .bak (the original will be preserved)' : 'Open workspace', defaultPath: settings.dataFolder, filters: [{ name: 'DeskGhost workspace', extensions: ['json'] }], properties: ['openFile'] });
     if (picked.canceled) return stateEnvelope();
     result = await bridge.request(method, { path: picked.filePaths[0] }); acceptState(result, false); await rememberOpenFiles();
   } else if (method === 'saveAs' || method === 'exportWorkspace') {
     const document = lastState.documents.find(d => d.id === (payload.workspaceId || lastState.activeWorkspaceId));
-    if (!document) throw new Error('请先打开工作区。');
+    if (!document) throw new Error('Open a workspace first.');
     const safeName = document.workspace.name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').slice(0, 90);
-    const picked = await dialog.showSaveDialog(win, { title: method === 'saveAs' ? '另存并继续（请选择新文件）' : '导出工作区（请选择新文件）', defaultPath: path.join(settings.dataFolder, safeName + '-' + Date.now() + '.deskghost.json'), filters: [{ name: 'DeskGhost 工作区', extensions: ['json'] }] });
+    const picked = await dialog.showSaveDialog(win, { title: method === 'saveAs' ? 'Save a copy and continue (choose a new file)' : 'Export workspace (choose a new file)', defaultPath: path.join(settings.dataFolder, safeName + '-' + Date.now() + '.deskghost.json'), filters: [{ name: 'DeskGhost workspace', extensions: ['json'] }] });
     if (picked.canceled || !picked.filePath) return stateEnvelope();
     if (bridge.failed) {
       await rescueSnapshot(document, picked.filePath, method === 'saveAs');
@@ -434,7 +435,7 @@ async function invoke(method, payload) {
     const previous = settings;
     const candidate = { ...settings };
     if (method === 'chooseDataFolder') {
-      const picked = await dialog.showOpenDialog(win, { title: '选择新工作区的数据文件夹', defaultPath: settings.dataFolder, properties: ['openDirectory', 'createDirectory'] });
+      const picked = await dialog.showOpenDialog(win, { title: 'Choose the data folder for new workspaces', defaultPath: settings.dataFolder, properties: ['openDirectory', 'createDirectory'] });
       if (picked.canceled) return stateEnvelope();
       candidate.dataFolder = picked.filePaths[0];
     } else {
@@ -446,7 +447,7 @@ async function invoke(method, payload) {
     circles.reset(); speedDismiss.reset(Date.now());
     nextRoamCheck = 0;
     updateRoaming(Date.now());
-  } else throw new Error('不支持的桌面操作。');
+  } else throw new Error('This desktop operation is not supported.');
   return acceptState(lastState);
 }
 
@@ -470,17 +471,17 @@ else {
             if (files.length >= 12 || ++inspected >= 4096) break;
           }
         }
-        catch (error) { if (error.code !== 'ENOENT') warningList.push('无法读取数据文件夹：' + error.message); }
+        catch (error) { if (error.code !== 'ENOENT') warningList.push('Cannot read the data folder: ' + error.message); }
       }
       for (const file of files) {
         try { acceptState(await bridge.request('openWorkspace', { path: file }), false); }
         catch (error) { warningList.push(path.basename(file) + '：' + error.message); }
       }
       if (!files.length) {
-        try { acceptState(await bridge.request('createWorkspace', { name: '我的工作区', folder: settings.dataFolder }), false); }
+        try { acceptState(await bridge.request('createWorkspace', { name: 'My workspace', folder: settings.dataFolder }), false); }
         catch (error) { warningList.push(error.message); }
       }
-      if (!lastState.documents.length && bridge.failed) warningList.push('数据服务不可用，任务编辑已停止。');
+      if (!lastState.documents.length && bridge.failed) warningList.push('The data service is unavailable. Task editing is paused.');
       await rememberOpenFiles();
     })();
     const area = screen.getPrimaryDisplay().workArea;
@@ -496,19 +497,19 @@ else {
       try { const file = fileURLToPath(details.url); const relative = path.relative(webRoot, file); permitted = !relative.startsWith('..') && !path.isAbsolute(relative); } catch { permitted = details.url.startsWith('data:'); }
       callback({ cancel: !permitted });
     });
-    win.webContents.on('render-process-gone', () => { rendererReady = false; cancelActivation(); setReadyEscape(false); regions = []; dragUntil = 0; setInteractive(false); win.hide(); warningList.push('界面进程已停止，已保存数据保留。点击托盘重新载入。'); });
+    win.webContents.on('render-process-gone', () => { rendererReady = false; cancelActivation(); setReadyEscape(false); regions = []; dragUntil = 0; setInteractive(false); win.hide(); warningList.push('The interface process stopped. Saved data is preserved; click the tray icon to reload.'); });
     win.webContents.on('unresponsive', () => { regions = []; dragUntil = 0; setInteractive(false); });
     win.on('close', event => { if (!quitting) { event.preventDefault(); requestHide(); } });
     win.webContents.on('did-finish-load', () => { rendererReady = true; mode = 'graph'; const requestedId = activateWindow(); send({ type: 'summon', activationId: requestedId, mode, point: { x: area.width / 2, y: area.height / 2 } }); });
     ipcMain.handle('deskghost:invoke', (event, method, payload = {}) => {
       validateSender(event);
-      if (typeof method !== 'string' || !payload || typeof payload !== 'object' || Array.isArray(payload) || Buffer.byteLength(JSON.stringify(payload), 'utf8') > 256 * 1024) throw new Error('请求格式无效或超过大小上限。');
+      if (typeof method !== 'string' || !payload || typeof payload !== 'object' || Array.isArray(payload) || Buffer.byteLength(JSON.stringify(payload), 'utf8') > 256 * 1024) throw new Error('The request format is invalid or exceeds its size limit.');
       // Visual transitions and hit testing must never wait for disk writes or a
       // file picker. Only document/settings operations enter the serial queue.
       if (method === 'hide') { hideOverlay(payload.disperse === true); return stateEnvelope(); }
       if (method === 'summon') { summon(payload.mode || 'graph', payload.internal === true); return stateEnvelope(); }
       if (method === 'setRegions') { const accepted = setRegions(payload); return Object.hasOwn(payload, 'readyActivation') ? accepted : stateEnvelope(); }
-      if (pendingOperations >= 32) throw new Error('操作过于频繁，请稍后重试。');
+      if (pendingOperations >= 32) throw new Error('Too many operations are pending. Try again shortly.');
       pendingOperations++;
       const operation = operationQueue.then(() => invoke(method, payload));
       operationQueue = operation.catch(() => {}).finally(() => { pendingOperations--; });
@@ -516,10 +517,10 @@ else {
     });
     ipcMain.on('deskghost:interactive', (event, value) => { try { validateSender(event); if (typeof value === 'boolean') refreshHitTest(screen.getCursorScreenPoint()); } catch {} });
     ipcMain.on('deskghost:regions', (event, payload) => { try { validateSender(event); setRegions(payload); } catch {} });
-    tray = new Tray(trayImage()); tray.setToolTip('DeskGhost · 三角碎片桌宠');
+    tray = new Tray(trayImage()); tray.setToolTip('DeskGhost - Desktop companion');
     const openGraph = () => { if (!rendererReady) void win.loadFile(rendererPath); else summon('graph'); };
     tray.on('click', openGraph);
-    tray.setContextMenu(Menu.buildFromTemplate([{ label: '创建任务', click: () => summon('create') }, { label: '任务图', click: openGraph }, { type: 'separator' }, { label: '收起', click: requestHide }, { label: '退出 DeskGhost', click: requestExit }]));
+    tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Create task', click: () => summon('create') }, { label: 'Task graph', click: openGraph }, { type: 'separator' }, { label: 'Hide', click: requestHide }, { label: 'Quit DeskGhost', click: requestExit }]));
     try { configureHotkeys(settings, true); } catch (error) { warningList.push(error.message); }
     pollCursor();
     powerMonitor.on('suspend', () => { suspended = true; clearTimeout(sampleTimer); circles.reset(); setReadyEscape(false); setRoaming(false); });

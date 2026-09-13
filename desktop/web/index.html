@@ -1,104 +1,96 @@
-<!doctype html>
-<html lang="zh-CN">
+﻿<!doctype html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>DeskGhost</title>
-  <link rel="stylesheet" href="app.css">
-  <link rel="stylesheet" href="graph.css">
+  <link rel="stylesheet" href="fonts.css"><link rel="stylesheet" href="card.css"><link rel="stylesheet" href="app.css"><link rel="stylesheet" href="graph.css"><link rel="stylesheet" href="scene.css"><link rel="stylesheet" href="editor.css">
 </head>
 <body data-mode="graph">
+  <svg class="svg-bank" aria-hidden="true"><defs>
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6.5"/><path d="m15 15 5 5"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="icon-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></symbol>
+    <symbol id="icon-undo" viewBox="0 0 24 24"><path d="M8 6 3 11l5 5M4 11h10a6 6 0 0 1 6 6"/></symbol>
+    <symbol id="icon-redo" viewBox="0 0 24 24"><path d="m16 6 5 5-5 5m4-5H10a6 6 0 0 0-6 6"/></symbol>
+    <symbol id="icon-column" viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="16" rx="2"/><path d="M17 8v8m-4-4h8"/></symbol>
+    <symbol id="icon-trash" viewBox="0 0 32 36"><path d="M7 11 9 31q0 2 2 2h10q2 0 2-2l2-20M4 8h24M11 8V4h10v4M13 14v13m6-13v13"/></symbol>
+  </defs></svg>
   <canvas id="flock" aria-hidden="true"></canvas>
-  <main id="manager" aria-label="任务工作区">
-    <header class="workspace-bar glass" data-interactive>
-      <span class="brand brand-mark" id="pet-recall" aria-hidden="true">
-        <svg viewBox="0 0 32 32" fill="currentColor"><path d="M14 3Q15 1 17 4L25 16Q27 19 23 18L8 15Q5 14 8 11Z"/><path d="M5 18Q4 16 7 17L16 22Q18 23 15 24L6 27Q4 28 4 25Z"/><path d="M23 22Q24 20 25 23L28 28Q29 30 26 29L20 27Q18 26 20 25Z"/></svg>
-      </span>
-      <div class="brand-name">DeskGhost<span>桌间微光</span></div>
-      <span class="bar-divider"></span>
-      <button id="workspace-toggle" class="workspace-toggle" aria-expanded="false"><span id="workspace-name">正在打开工作区</span><svg viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></button>
-      <span id="save-indicator" class="save-indicator" title="正在连接本地数据服务"></span>
-      <div class="bar-spacer"></div>
-      <button id="open-search" class="icon-button" title="查找任务 · Ctrl+F" aria-label="查找任务"><svg viewBox="0 0 24 24"><circle cx="10.7" cy="10.7" r="6.3"/><path d="m15.5 15.5 4.4 4.4"/></svg></button>
-      <button id="open-settings" class="icon-button" title="偏好设置" aria-label="偏好设置"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2.5"/><circle cx="16" cy="17" r="2.5"/></svg></button>
-      <button id="hide-manager" class="icon-button" title="收起到桌宠 · Esc" aria-label="收起到桌宠"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
+  <div id="scene-hook" aria-hidden="true"></div>
+  <section id="desk-scene" class="scene-shell" data-interactive aria-label="Leather workspace">
+    <div class="scene-leather" aria-hidden="true"></div><button id="scene-ring" type="button" title="Unhook & close" aria-label="Close workspace"></button>
+  <main id="manager" aria-label="Task workspace">
+    <header class="workspace-bar paper-panel" data-interactive>
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 42 42"><g transform="rotate(-12 21 21)"><rect x="3" y="5" width="22" height="25" rx="6" fill="#363636"/><rect x="4" y="4" width="21" height="22" rx="5" fill="#9c9283"/><rect x="7" y="6" width="15" height="15" rx="4" fill="#fff1de"/><rect x="22" y="23" width="16" height="16" rx="4" fill="#363636"/><rect x="22" y="21" width="16" height="15" rx="4" fill="#9c9283"/><rect x="24" y="23" width="12" height="9" rx="3" fill="#fff1de"/></g></svg></span>
+      <span class="brand-name">DeskGhost</span><span class="bar-divider"></span>
+      <button id="workspace-toggle" class="key workspace-toggle" aria-expanded="false" aria-controls="workspace-menu"><span id="workspace-name">Workspace</span><svg class="icon"><use href="#icon-down"/></svg></button>
+      <button id="save-indicator" class="save-indicator" aria-label="Save workspace" title="Connecting to the local data service"></button><span class="bar-spacer"></span>
+      <button id="open-search" class="key icon-button" title="Find a task · Ctrl+F" aria-label="Find a task" aria-expanded="false"><svg class="icon"><use href="#icon-search"/></svg></button>
+      <button id="open-settings" class="key settings-key" title="Preferences" aria-expanded="false">Setting</button>
+      <button id="hide-manager" class="key esc-key" title="Hide workspace · Esc" aria-label="Hide workspace">Esc</button>
     </header>
-
-    <section id="workspace-menu" class="popover glass" data-interactive hidden>
-      <div class="eyebrow">已打开的工作区</div>
-      <div id="workspace-list"></div>
-      <div class="menu-rule"></div>
-      <button class="menu-action" id="new-workspace">＋ 新建工作区</button>
-      <button class="menu-action" id="open-workspace">↗ 打开工作区文件</button>
-      <button class="menu-action" id="recover-workspace">从 .bak 备份恢复工作区</button>
-      <button class="menu-action" id="export-workspace">导出 / 备份</button>
-      <button class="menu-action" id="save-as">另存并继续</button>
-      <button class="menu-action subtle-danger" id="close-workspace">关闭当前工作区</button>
+    <section id="workspace-menu" class="popover paper-panel" data-interactive hidden aria-label="Workspaces">
+      <div class="eyebrow">Workspaces</div><div id="workspace-list"></div><div class="menu-rule"></div>
+      <button class="menu-action" id="new-workspace">＋ New workspace</button><button class="menu-action" id="open-workspace">↗ Open workspace</button>
+      <button class="menu-action" id="recover-workspace">Recover from backup</button><button class="menu-action" id="export-workspace">Export / backup</button>
+      <button class="menu-action" id="save-as">Save as & continue</button><button class="menu-action" id="open-trash">Recycle bin</button><button class="menu-action subtle-danger" id="close-workspace">Close workspace</button>
     </section>
-
-    <section id="graph-board" aria-label="可拖拽任务图" data-interactive tabindex="0"></section>
-    <div id="board-caption" aria-hidden="true"><span id="board-stats">每个想法，都可以成为起点</span><span>拖动连接点建立路径 · 拖离端点断开 · 卡片自动吸附</span></div>
-
-    <section id="search-panel" class="search-panel glass" data-interactive hidden aria-label="查找任务">
-      <div class="panel-heading"><h2>找到那一步</h2><button data-close="search-panel" class="icon-button" aria-label="关闭搜索">×</button></div>
-      <label class="search-field"><svg viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input id="search-title" placeholder="按标题查找…" maxlength="256" autocomplete="off"></label>
-      <div class="filter-row"><select id="search-state" aria-label="状态筛选"><option value="">全部状态</option value="NotStarted">未开始</option><option value="InProgress">进行中</option><option value="Completed">已完成</option><option value="Stopped">已停止</option></select><select id="search-category" aria-label="分类筛选"><option value="*">全部分类</option></select></div>
-      <div class="result-summary"><span id="result-count">0 个结果</span><button class="text-button" id="clear-search">清除筛选</button></div>
-      <div id="search-results" role="list" class="search-results"></div>
-    </section>
-
-    <nav class="work-dock glass" aria-label="任务工具栏" data-interactive>
-      <div class="segmented"><button id="graph-mode" class="active" title="任务图"><svg viewBox="0 0 20 20"><rect x="2" y="7" width="5" height="6" rx="1.5"/><rect x="13" y="2" width="5" height="6" rx="1.5"/><rect x="13" y="12" width="5" height="6" rx="1.5"/><path d="M7 10h3V5h3m-3 5v5h3"/></svg><span>任务图</span></button><button id="category-mode" title="分类视图"><svg viewBox="0 0 20 20"><rect x="2.5" y="3" width="6" height="14" rx="2"/><rect x="11.5" y="3" width="6" height="9" rx="2"/></svg><span>分类</span></button></div>
-      <span class="bar-divider"></span>
-      <button id="undo" class="icon-button" aria-label="撤销" title="撤销 · Ctrl+Z"><svg viewBox="0 0 24 24"><path d="M8 6 3 11l5 5M4 11h10a6 6 0 0 1 6 6"/></svg></button>
-      <button id="redo" class="icon-button" aria-label="重做" title="重做 · Ctrl+Shift+Z"><svg viewBox="0 0 24 24"><path d="m16 6 5 5-5 5m4-5H10a6 6 0 0 0-6 6"/></svg></button>
-      <button id="add-column" class="icon-button" aria-label="增加逻辑时间列" title="增加逻辑时间列"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="16" rx="2"/><path d="M17 8v8m-4-4h8"/></svg></button>
-      <select id="history-view" title="归档与回收站" aria-label="任务范围"><option value="active">当前任务</option><option value="all">包含归档</option><option value="archived">已归档</option><option value="trash">回收站</option></select>
-      <span class="bar-divider"></span>
-      <button id="new-task" class="primary-button"><span class="plus">＋</span> 新建任务 <kbd>N</kbd></button>
+    <nav class="work-dock paper-panel" aria-label="Views and task stages" data-interactive>
+      <div class="view-tabs" role="tablist" aria-label="View">
+        <button id="graph-mode" class="key active" role="tab" aria-selected="true" aria-controls="graph-board">Graph</button><button id="category-mode" class="key" role="tab" aria-selected="false" tabindex="-1" aria-controls="graph-board">Category</button><button id="archive-mode" class="key" role="tab" aria-selected="false" tabindex="-1" aria-controls="graph-board">Archive</button>
+      </div><span class="bar-divider"></span>
+      <div class="stage-filters" role="group" aria-label="Filter by stage"><button class="key small" data-state-filter="" aria-pressed="true">All</button><button class="key small" data-state-filter="NotStarted" aria-pressed="false">To do</button><button class="key small" data-state-filter="InProgress" aria-pressed="false">In progress</button><button class="key small" data-state-filter="Completed" aria-pressed="false">Done</button><button class="key small" data-state-filter="Stopped" aria-pressed="false">Stopped</button></div>
+      <span class="bar-spacer"></span><button id="new-task" class="key green-key"><svg class="icon"><use href="#icon-plus"/></svg>New task</button>
+      <input id="history-view" type="hidden" value="active"><input id="search-state" type="hidden" value="">
     </nav>
-    <div class="zoom-tools glass" data-interactive><button id="zoom-out" title="缩小" aria-label="缩小">−</button><button id="fit-graph" title="适应任务图">适应</button><button id="zoom-in" title="放大" aria-label="放大">＋</button></div>
-    <div id="selection-tools" class="selection-tools glass" data-interactive hidden><span id="selection-count"></span><button id="edit-selected">编辑</button><button id="continue-selected">延续 / 汇合 →</button><button id="archive-selected">归档</button><button id="restore-selected">恢复</button><button id="delete-selected" class="subtle-danger">删除</button></div>
+    <section id="graph-board" aria-label="Task graph" data-interactive tabindex="0"></section>
+    <div class="graph-controls" data-interactive aria-label="Graph tools"><button id="undo" class="key small icon-button" aria-label="Undo" title="Undo · Ctrl+Z"><svg class="icon"><use href="#icon-undo"/></svg></button><button id="redo" class="key small icon-button" aria-label="Redo" title="Redo · Ctrl+Shift+Z"><svg class="icon"><use href="#icon-redo"/></svg></button><button id="add-column" class="key small icon-button" aria-label="Add a time slice" title="Add a time slice"><svg class="icon"><use href="#icon-column"/></svg></button><button id="fit-graph" class="key small" title="Latest time slice">Latest</button></div>
+    <div id="selection-tools" class="selection-tools" data-interactive hidden><button id="archive-selected" class="key small">Archive</button><button id="restore-selected" class="key small">Restore</button></div>
+    <section id="search-panel" class="search-panel paper-panel" data-interactive hidden aria-label="Find a task"><div class="panel-heading"><h2>Find a task</h2><button data-close="search-panel" class="key small icon-button" aria-label="Close search"><svg class="icon"><use href="#icon-close"/></svg></button></div><label class="search-field"><svg class="icon"><use href="#icon-search"/></svg><input id="search-title" placeholder="Search titles…" maxlength="256" autocomplete="off" aria-label="Search titles"></label><select id="search-category" aria-label="Filter by category"><option value="*">All categories</option></select><div class="result-summary"><span id="result-count">0 results</span><button class="text-button" id="clear-search">Clear filters</button></div><div id="search-results" role="list" class="search-results"></div></section>
   </main>
-
-  <button id="wand-anchor" class="wand-anchor" type="button" data-interactive hidden aria-label="单击创建任务"></button>
-
-  <section id="composer" class="composer dg-card-surface" data-interactive hidden aria-label="任务卡片编辑器" aria-describedby="composer-eyebrow">
-    <form id="task-form" novalidate>
-      <header class="composer-top dg-card-top">
-        <span class="visually-hidden" id="composer-eyebrow">捕捉下一步</span>
-        <span class="composer-initial-state dg-task-state"><i class="dg-state-dot" aria-hidden="true"></i>未开始</span>
-        <label id="edit-status-field" class="composer-state dg-task-state" hidden><span class="visually-hidden">任务状态</span><i class="dg-state-dot" aria-hidden="true"></i><select id="task-state" aria-label="任务状态"><option value="NotStarted">未开始</option><option value="InProgress">进行中</option><option value="Completed">已完成</option><option value="Stopped">已停止</option></select></label>
-        <button id="close-composer" class="dg-card-action" type="button" aria-label="取消编辑">×</button>
-      </header>
-      <label class="composer-workspace"><span>工作区</span><select id="task-workspace" aria-label="所属工作区"></select></label>
-      <div id="source-summary" class="source-summary" hidden></div>
-      <label class="composer-title"><span class="visually-hidden">标题</span><input id="task-title" class="dg-card-title-input" placeholder="给这一步起个名字" maxlength="256" autocomplete="off" required></label>
-      <label class="composer-description"><span class="visually-hidden">内容</span><textarea id="task-description" class="dg-card-description-input" placeholder="记录想法、细节，或下一步…" maxlength="16000" rows="4"></textarea></label>
-      <label class="composer-category dg-category-pill"><span class="visually-hidden">分类</span><input id="task-category" list="category-suggestions" placeholder="分类 / 新建分类" maxlength="80" autocomplete="off"><datalist id="category-suggestions"></datalist></label>
+  <section id="composer" hidden aria-label="Task card">
+    <form id="task-form" novalidate data-interactive>
+      <div id="card-perspective"><div id="card-rotor" data-face="front">
+        <div id="detail-card" class="dg-card-surface editor-face editor-front">
+          <div id="front-tags" class="dg-card-tags"></div><img id="front-note-clip" class="dg-note-clip" src="assets/paper/paperclip-front.svg" alt="A note is clipped to the back" hidden>
+          <div id="composer-sticker" class="dg-sticker-slot"></div>
+          <div class="dg-title-ribbon"><label for="task-title" class="visually-hidden">Title</label><input id="task-title" class="dg-card-title-input" type="text" placeholder="Your next step" maxlength="256" autocomplete="off" required></div>
+          <label for="task-description" class="visually-hidden">Description</label><textarea id="task-description" class="dg-card-description-input" placeholder="A few words to start with..." maxlength="16000" rows="5"></textarea>
+        </div>
+        <div id="detail-back" class="dg-card-surface editor-face editor-back" aria-hidden="true" inert>
+          <div class="back-stamp"><output id="detail-id" aria-label="Task ID">ASSIGNED ON SAVE</output><output id="detail-created" aria-label="Created timestamp">ON SAVE</output></div>
+          <div id="back-tags" class="dg-back-tags"></div>
+          <div id="note-paper" class="note-paper is-detached">
+            <img class="note-fastener note-fastener-back" src="assets/paper/paperclip-back.svg" alt="" aria-hidden="true"><img class="note-fastener note-fastener-front" src="assets/paper/paperclip-front.svg" alt="" aria-hidden="true">
+            <label for="task-notes" class="visually-hidden">Note</label><textarea id="task-notes" placeholder="A little more room..." maxlength="32000" rows="5" disabled></textarea>
+            <button id="attach-note" type="button" class="note-attach">+ Clip a note</button><button id="detach-note" type="button" class="note-detach" aria-label="Remove empty note" title="Remove empty note" hidden>Unclip</button>
+          </div>
+        </div>
+      </div><button id="card-grip" class="card-grip" type="button" aria-label="Pick up card; drag to place or to the bin" title="Drag to place · Enter to place in the latest slice"><span></span><span></span><span></span><span></span><span></span><span></span></button></div>
+      <select id="task-workspace" aria-label="Workspace" hidden></select><input id="task-category" type="hidden"><datalist id="category-suggestions"></datalist>
       <p id="composer-error" class="inline-error" role="alert"></p>
-      <footer class="composer-footer"><span id="composer-hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> 下一栏</span><button type="submit" id="submit-task" class="primary-button">创建任务 <span>↗</span></button></footer>
+      <footer class="card-editor-footer"><button id="flip-card" type="button" class="key" aria-label="Flip card to the back" aria-pressed="false">Turn over</button><button type="submit" id="submit-task" class="key green-key">Done</button></footer>
     </form>
+    <section id="tag-picker" class="tag-picker" data-interactive hidden aria-label="Choose a paper tag"><header class="visually-hidden"><span id="tag-picker-kind">Category</span><button id="close-tag-picker" type="button" aria-label="Close tag choices">x</button></header><input id="tag-query" type="search" maxlength="120" autocomplete="off" placeholder="Find or make a tag" aria-label="Find or make a tag"><div id="tag-options" class="tag-options" role="listbox"></div><footer><button id="tag-previous" type="button" aria-label="Previous tags">&larr;</button><span id="tag-page"></span><button id="tag-next" type="button" aria-label="Next tags">&rarr;</button></footer><button id="create-paper-tag" type="button" class="text-button">+ New category</button><p id="tag-error" class="inline-error" role="alert"></p></section>
   </section>
-
-  <section id="settings-panel" class="settings-panel glass" data-interactive hidden aria-label="偏好设置">
-    <div class="panel-heading"><div><span class="eyebrow">DESKGHOST / PREFERENCES</span><h2>让它按你的方式存在</h2></div><button data-close="settings-panel" class="icon-button" aria-label="关闭设置">×</button></div>
-    <label class="setting"><span><strong>碎片效果</strong><small>白色圆角三角 · 群鸟运动</small></span><select id="setting-effects"><option value="high">流畅 · 60 fps</option><option value="low">轻量 · 30 fps</option><option value="off">关闭动画</option></select></label>
-    <label class="setting"><span><strong>魔杖启用</strong><small>仅待机时识别，连续画两圈 · 直径约屏幕高度的 1/4</small></span><input id="setting-gesture" type="checkbox" role="switch"></label>
-    <div class="setting setting-dismiss-speed"><label for="setting-dismiss-speed"><strong>驱散速度</strong><small id="dismiss-speed-unit">屏高/秒 · 调低更容易驱散</small></label><output id="dismiss-speed-value" for="setting-dismiss-speed">1.5</output><input id="setting-dismiss-speed" type="range" min="0.5" max="4" step="0.1" value="1.5" aria-describedby="dismiss-speed-unit"></div>
-    <label class="setting"><span><strong>闲置时漫游</strong><small>平时停在屏幕外，恢复操作后退场</small></span><select id="setting-roam"><option value="180">3 分钟后</option><option value="300">5 分钟后</option><option value="600">10 分钟后</option><option value="0">关闭漫游</option></select></label>
-    <label class="setting"><span><strong>创建任务快捷键</strong></span><input id="setting-create-key" maxlength="80" aria-label="创建任务快捷键"></label>
-    <label class="setting"><span><strong>任务图快捷键</strong></span><input id="setting-graph-key" maxlength="80" aria-label="任务图快捷键"></label>
-    <div class="setting storage-setting"><span><strong>新工作区存储位置</strong><small id="data-folder"></small></span><button id="choose-folder" class="secondary-button">更改</button></div>
-    <p class="settings-note">已打开的文件保持原位置。字体暂用现有字体占位，后续再选择。</p>
-    <p id="settings-error" class="inline-error" role="alert"></p>
-    <footer class="settings-footer"><button id="quit-app" class="text-button">退出 DeskGhost</button><button id="apply-settings" class="primary-button">保存设置</button></footer>
+  <section id="transfer-prompt" class="transfer-prompt paper-panel" data-interactive hidden role="dialog" aria-modal="true" aria-labelledby="transfer-heading" aria-describedby="transfer-description"><h2 id="transfer-heading">Move this card?</h2><p id="transfer-description"></p><p id="transfer-error" class="inline-error" role="alert"></p><div><button id="cancel-transfer" class="key" type="button">Keep here</button><button id="confirm-transfer" class="key green-key" type="button">Move card</button></div></section>
+  <section id="settings-panel" class="settings-panel paper-panel" data-interactive hidden aria-label="Preferences">
+    <div class="panel-heading"><h2>Setting</h2><button data-close="settings-panel" class="key small icon-button" aria-label="Close settings"><svg class="icon"><use href="#icon-close"/></svg></button></div>
+    <div class="settings-tabs" role="tablist" aria-label="Settings category"><button class="key small" id="settings-visual-tab" data-settings-tab="visual" role="tab" aria-selected="true" aria-controls="settings-visual">Visual</button><button class="key small" id="settings-wand-tab" data-settings-tab="wand" role="tab" aria-selected="false" tabindex="-1" aria-controls="settings-wand">Wand</button><button class="key small" id="settings-system-tab" data-settings-tab="system" role="tab" aria-selected="false" tabindex="-1" aria-controls="settings-system">System</button></div>
+    <div class="settings-body">
+      <section id="settings-visual" role="tabpanel" aria-labelledby="settings-visual-tab"><div class="setting setting-stack"><label for="setting-effects"><strong>Keycap motion</strong><small>Flocking, inertia & soft landings</small></label><div class="effect-keys" role="group" aria-label="Effect level"><button type="button" class="key small" data-effects="high" aria-pressed="true">Full</button><button type="button" class="key small" data-effects="low" aria-pressed="false">Light</button><button type="button" class="key small" data-effects="off" aria-pressed="false">Off</button></div><select id="setting-effects" class="visually-hidden" tabindex="-1" aria-label="Effect level"><option value="high">Full</option><option value="low">Light</option><option value="off">Off</option></select></div><div class="setting"><span><strong>Typography</strong><small>Bungee Regular · Headings<br>Teko Semibold · Body</small></span><span class="type-sample">Aa</span></div></section>
+      <section id="settings-wand" role="tabpanel" aria-labelledby="settings-wand-tab" hidden><label class="setting"><span><strong>Wand gesture</strong><small>Two circles while idle, then click to write</small></span><input id="setting-gesture" type="checkbox" role="switch"></label><div class="setting setting-dismiss-speed"><label for="setting-dismiss-speed"><strong>Dismiss speed</strong><small id="dismiss-speed-unit">Screen heights / second · Lower is easier</small></label><output id="dismiss-speed-value" for="setting-dismiss-speed">1.5</output><input id="setting-dismiss-speed" type="range" min="0.5" max="4" step="0.1" value="1.5" aria-describedby="dismiss-speed-unit"></div><label class="setting"><span><strong>Idle roaming</strong><small>Rest offscreen until the desktop is quiet</small></span><select id="setting-roam"><option value="180">After 3 minutes</option><option value="300">After 5 minutes</option><option value="600">After 10 minutes</option><option value="0">Off</option></select></label></section>
+      <section id="settings-system" role="tabpanel" aria-labelledby="settings-system-tab" hidden><label class="setting"><span><strong>Create task</strong></span><input id="setting-create-key" maxlength="80" aria-label="Create task shortcut"></label><label class="setting"><span><strong>Open task graph</strong></span><input id="setting-graph-key" maxlength="80" aria-label="Task graph shortcut"></label><div class="setting storage-setting"><span><strong>Workspace folder</strong><small id="data-folder"></small></span><button id="choose-folder" class="key small">Change</button></div></section>
+    </div><p id="settings-error" class="inline-error" role="alert"></p><footer class="settings-footer"><button id="quit-app" class="text-button">Quit DeskGhost</button><button id="apply-settings" class="key green-key">Save settings</button></footer>
   </section>
-
-  <section id="name-prompt" class="name-prompt glass" data-interactive hidden aria-label="新建工作区"><form id="workspace-form"><div class="panel-heading"><h2>一片新的工作空间</h2><button class="icon-button" type="button" data-close="name-prompt" aria-label="取消新建工作区">×</button></div><input id="workspace-input" placeholder="工作区名称" maxlength="120" required autocomplete="off"><button class="primary-button" type="submit">创建工作区 →</button></form></section>
-  <div id="toast" class="toast glass" role="status" data-interactive hidden></div>
-  <div id="boot-screen" class="boot-screen glass" data-interactive><div class="boot-spark"></div><h1>DeskGhost</h1><p id="boot-message">正在打开你的工作空间…</p><button id="retry-boot" class="secondary-button" hidden>重试连接</button></div>
+  <section id="name-prompt" class="name-prompt paper-panel" data-interactive hidden aria-label="New workspace"><form id="workspace-form"><div class="panel-heading"><h2>New workspace</h2><button class="key small icon-button" type="button" data-close="name-prompt" aria-label="Cancel"><svg class="icon"><use href="#icon-close"/></svg></button></div><input id="workspace-input" placeholder="Workspace name" maxlength="120" required autocomplete="off" aria-label="Workspace name"><button class="key green-key" type="submit">Create workspace ↗</button></form></section>
+  <div id="toast" class="toast paper-panel" role="status" data-interactive hidden></div><div id="boot-screen" class="boot-screen paper-panel" data-interactive><h1>DeskGhost</h1><p id="boot-message">Opening your workspace…</p><button id="retry-boot" class="key" hidden>Retry</button></div>
+  </section>
+  <button id="wand-anchor" class="wand-anchor" type="button" data-interactive hidden aria-label="Click to create a task"></button>
+  <button id="task-trash" type="button" data-interactive aria-label="Recycle bin. Drop a card here to discard it." title="Recycle bin"><svg><use href="#icon-trash"/></svg></button>
   <script type="module" src="app.js"></script>
 </body>
 </html>

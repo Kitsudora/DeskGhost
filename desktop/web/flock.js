@@ -4,6 +4,11 @@ const MAX_CANVAS_PIXELS = 6_000_000;
 const MAX_CANVAS_DIMENSION = 16_384;
 const MODES = new Set(['hidden', 'idle', 'roaming', 'ring', 'card', 'disperse']);
 const EFFECTS = new Set(['off', 'low', 'high']);
+const KEYCAP_PALETTES = [
+  { face: '#fff1de', rim: '#f5e7d5', side: '#9c9283', legend: '#363636' },
+  { face: '#9c9283', rim: '#f5e7d5', side: '#9c9283', legend: '#fff1de' },
+  { face: '#363636', rim: '#9c9283', side: '#9c9283', legend: '#fff1de' }
+];
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const smoothstep = value => value * value * (3 - 2 * value);
 const random = (min, max) => min + Math.random() * (max - min);
@@ -191,18 +196,20 @@ export class Flock {
     const count = Math.min(MAX_BOIDS, this._effects === 'low' ? 42 : 72);
     if (this._boids.length > count) this._boids.length = count;
     while (this._boids.length < count) {
-      const index = this._boids.length, size = random(9, 13.5);
+      const index = this._boids.length, size = random(11.5, 15.5);
       const boid = {
         index, x: 0, y: 0, vx: 0, vy: 0, ax: 0, ay: 0, tx: 0, ty: 0,
-        angle: random(-Math.PI, Math.PI), phase: random(0, TAU),
+        angle: random(-Math.PI, Math.PI), phase: random(0, TAU), tilt: 0,
         mass: random(0.82, 1.18), pace: random(0.88, 1.08), size,
         ringX: 0, ringY: 0, ringGoalX: 0, ringGoalY: 0,
         ringVX: 0, ringVY: 0, ringAt: 0, ringInitialized: false,
         arrivalWeight: 0, arrivalAge: 0,
         u: Math.random(), v: Math.random(), opacity: 0, delay: 0,
-        whiteness: random(0.82, 1), interior: index % 6 === 0,
+        surfaceAlpha: random(0.9, 1), interior: index % 6 === 0,
+        palette: KEYCAP_PALETTES[index % 9 === 0 ? 2 : index % 4 === 0 ? 1 : 0],
+        legend: 'ASDFJKL+'[index % 8], legendFont: `400 ${Math.round(size * 0.5)}px Bungee, "Segoe UI", sans-serif`,
         wanderAngle: random(0, TAU), wanderTurn: random(-0.8, 0.8),
-        roamAt: 0, departed: false, path: trianglePath(size)
+        roamAt: 0, departed: false, keycap: keycapPaths(size)
       };
       this._spawn(boid);
       this._boids.push(boid);
@@ -503,6 +510,10 @@ export class Flock {
         const turn = Math.atan2(Math.sin(direction - boid.angle), Math.cos(direction - boid.angle));
         boid.angle += turn * (1 - Math.exp(-11 * dt));
       }
+      // Physical keycaps lean gently into motion; their face stays readable
+      // through turns instead of spinning to match every change of heading.
+      const tilt = clamp(boid.vx / 700, -1, 1) * 0.22 + Math.sin(this._time * 0.65 + boid.phase) * 0.055;
+      boid.tilt += (tilt - boid.tilt) * (1 - Math.exp(-4 * dt));
       const alpha = this._mode === 'card' && boid.interior ? 0.18 : 1;
       boid.opacity += (alpha - boid.opacity) * (1 - Math.exp(-(roaming ? 2 : 12) * dt));
     }
@@ -512,24 +523,36 @@ export class Flock {
     this._clear();
     const context = this._context;
     context.setTransform(this._dpr, 0, 0, this._dpr, 0, 0);
-    context.fillStyle = '#ffffff';
-    context.strokeStyle = 'rgba(24, 29, 38, 0.18)';
-    context.lineWidth = 0.45;
-    context.shadowColor = 'rgba(12, 17, 26, 0.28)';
-    context.shadowBlur = this._effects === 'high' ? 3 : 1.5;
-    context.shadowOffsetY = 1;
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
     for (const boid of this._boids) {
       if (boid.opacity < 0.005 || this._outside(boid)) continue;
       context.save();
       context.translate(boid.x, boid.y);
-      context.rotate(boid.angle);
-      context.globalAlpha = boid.opacity * boid.whiteness;
-      context.fill(boid.path);
-      context.stroke(boid.path);
+      context.rotate(boid.tilt);
+      context.globalAlpha = boid.opacity * boid.surfaceAlpha;
+      const keycap = boid.keycap, palette = boid.palette;
+      context.shadowColor = 'rgba(54, 54, 54, 0.26)';
+      context.shadowBlur = this._effects === 'high' ? 3 : 1.5;
+      context.shadowOffsetX = 0.8;
+      context.shadowOffsetY = 1.8;
+      context.fillStyle = '#363636';
+      context.fill(keycap.base);
+      context.shadowBlur = context.shadowOffsetX = context.shadowOffsetY = 0;
+      context.fillStyle = palette.side; context.fill(keycap.side);
+      context.fillStyle = palette.rim; context.fill(keycap.rim);
+      context.fillStyle = palette.face; context.fill(keycap.face);
+      context.strokeStyle = 'rgba(54, 54, 54, 0.18)'; context.lineWidth = 0.45;
+      context.stroke(keycap.face);
+      context.strokeStyle = 'rgba(255, 248, 237, 0.55)'; context.lineWidth = 0.6;
+      context.stroke(keycap.highlight);
+      context.fillStyle = palette.legend;
+      context.font = boid.legendFont;
+      context.fillText(boid.legend, 0, keycap.legendY);
       context.restore();
     }
     context.globalAlpha = 1;
-    context.shadowBlur = context.shadowOffsetY = 0;
+    context.shadowBlur = context.shadowOffsetX = context.shadowOffsetY = 0;
   }
 
   _clear() {
@@ -545,25 +568,32 @@ export class Flock {
   }
 }
 
-function trianglePath(size) {
-  const vertices = [
-    { x: size * random(0.62, 0.76), y: size * random(-0.08, 0.04) },
-    { x: size * random(-0.47, -0.35), y: size * random(-0.47, -0.35) },
-    { x: size * random(-0.36, -0.22), y: size * random(0.44, 0.58) }
-  ];
+function keycapPaths(size) {
+  const width = size * 1.35, height = size * 1.3, depth = size * 0.22;
+  const left = -width / 2, top = -height / 2, radius = size * 0.23;
+  const faceTop = top + 1.1, faceHeight = height - depth - 1.8;
+  const highlight = new Path2D();
+  highlight.moveTo(left + 2.7 + radius * 0.7, faceTop + 0.6);
+  highlight.lineTo(width / 2 - 2.7 - radius * 0.7, faceTop + 0.6);
+  // Cache geometry once per boid. Layered solids match the supplied keycap
+  // reference without gradients, bitmap assets, or allocations in the draw loop.
+  return {
+    base: roundedRectPath(left, top, width, height, radius),
+    side: roundedRectPath(left + 0.7, top + 0.35, width - 1.4, height - 1.2, radius - 0.4),
+    rim: roundedRectPath(left + 1.3, top + 0.5, width - 2.6, height - depth - 0.6, radius * 0.85),
+    face: roundedRectPath(left + 2.05, faceTop, width - 4.1, faceHeight, radius * 0.7),
+    highlight, legendY: faceTop + faceHeight / 2 + 0.5
+  };
+}
+
+function roundedRectPath(x, y, width, height, radius) {
   const path = new Path2D();
-  const rounding = 0.17;
-  for (let index = 0; index < 3; index++) {
-    const previous = vertices[(index + 2) % 3];
-    const current = vertices[index];
-    const next = vertices[(index + 1) % 3];
-    const enterX = current.x + (previous.x - current.x) * rounding;
-    const enterY = current.y + (previous.y - current.y) * rounding;
-    const exitX = current.x + (next.x - current.x) * rounding;
-    const exitY = current.y + (next.y - current.y) * rounding;
-    if (index === 0) path.moveTo(enterX, enterY); else path.lineTo(enterX, enterY);
-    path.quadraticCurveTo(current.x, current.y, exitX, exitY);
-  }
+  const right = x + width, bottom = y + height;
+  path.moveTo(x + radius, y);
+  path.lineTo(right - radius, y); path.quadraticCurveTo(right, y, right, y + radius);
+  path.lineTo(right, bottom - radius); path.quadraticCurveTo(right, bottom, right - radius, bottom);
+  path.lineTo(x + radius, bottom); path.quadraticCurveTo(x, bottom, x, bottom - radius);
+  path.lineTo(x, y + radius); path.quadraticCurveTo(x, y, x + radius, y);
   path.closePath();
   return path;
 }

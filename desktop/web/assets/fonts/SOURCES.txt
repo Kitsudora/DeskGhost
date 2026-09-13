@@ -1,0 +1,42 @@
+The Bungee and Teko files were bundled unchanged from Google Fonts on 2026-09-12.
+These files load locally; the application makes no font download requests.
+
+Bungee-Regular.ttf
+Family: Bungee; normal; weight 400.
+Google Fonts commit: 6ce172f74aa355ea43eb964fa4a91570a4d3064d
+Source: https://raw.githubusercontent.com/google/fonts/6ce172f74aa355ea43eb964fa4a91570a4d3064d/ofl/bungee/Bungee-Regular.ttf
+SHA-256: c4f5361ce120af3e6b9156d0bf379fa19cda2ea0cd18ac01fd99596c6bf66e3f
+License: Bungee-OFL.txt (SIL Open Font License 1.1).
+License source: https://raw.githubusercontent.com/google/fonts/6ce172f74aa355ea43eb964fa4a91570a4d3064d/ofl/bungee/OFL.txt
+
+Teko-Variable.ttf (upstream filename: Teko[wght].ttf)
+Family: Teko; normal; variable wght axis 300-700, including SemiBold at 600.
+Google Fonts commit: 8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5
+Source: https://raw.githubusercontent.com/google/fonts/8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5/ofl/teko/Teko%5Bwght%5D.ttf
+SHA-256: d1321889f262bbbff632e7976349853399cd097b6f382d4b19790c915c13c1ae
+License: Teko-OFL.txt (SIL Open Font License 1.1).
+License source: https://raw.githubusercontent.com/google/fonts/8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5/ofl/teko/OFL.txt
+
+SmileySans-Oblique.ttf
+Family: Smiley Sans Oblique / 得意黑; Regular; version 2.0.1.
+Copied unchanged from the user's installed Windows font on 2026-09-13.
+The font's embedded name records 13/14 explicitly identify SIL OFL 1.1.
+Copyright: Copyright © 2022–2024 atelierAnchor. All rights reserved.
+Official project: https://github.com/atelier-anchor/smiley-sans
+SHA-256: b447d7e781f08bc95c4c9f23ba71ed2b8ebb639aa7184485c71c4ca5afcd25c4
+License: SmileySans-OFL.txt (unchanged official SIL Open Font License 1.1).
+License source: https://raw.githubusercontent.com/atelier-anchor/smiley-sans/main/LICENSE
+
+Orbitron-Regular.ttf
+Family: Orbitron; Regular; version 2.001.
+Copied unchanged from the user's installed Windows font on 2026-09-13.
+The font's embedded name records 13/14 explicitly identify SIL OFL 1.1.
+Copyright: Copyright 2018 The Orbitron Project Authors (https://github.com/theleagueof/orbitron), with Reserved Font Name: "Orbitron".
+Official project: https://github.com/theleagueof/orbitron
+SHA-256: 739162ac8e6fcadb559226f2fee57f55baad126728cec901b321042c7224088e
+License: Orbitron-OFL.txt (unchanged official SIL Open Font License 1.1).
+License source: https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/OFL.txt
+
+BankGothic Lt BT Light is not bundled. fonts.css may resolve an existing licensed
+local installation. Otherwise it uses the bundled Orbitron Regular geometric
+fallback; this fallback differs from the original BankGothic artwork.

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_图层_1" data-name="图层 1" xmlns="http://www.w3.org/2000/svg" width="232.095" height="461.414" viewBox="0 0 232.095 461.414">
+  <path d="M115.486,260.809h0c-32.996,0-59.745-26.749-59.745-59.745V7.851c0-3.278,2.658-5.936,5.936-5.936h107.617c3.278,0,5.936,2.658,5.936,5.936v193.213c0,32.996-26.749,59.745-59.745,59.745Z" style="fill: #878787;"/>
+  <path d="M112.166,258.894h0c-32.996,0-59.745-26.749-59.745-59.745V5.936c0-3.278,2.658-5.936,5.936-5.936h107.617c3.278,0,5.936,2.658,5.936,5.936v193.213c0,32.996-26.749,59.745-59.745,59.745Z" style="fill: #d6d6d6;"/>
+  <circle cx="115.486" cy="202.274" r="47.362" style="fill: #878787;"/>
+  <g>
+    <circle cx="117.198" cy="278.482" r="105.375" style="fill: none; stroke: #998016; stroke-miterlimit: 10; stroke-width: 19px;"/>
+    <circle cx="114.897" cy="273.614" r="105.375" style="fill: none; stroke: #e3be20; stroke-miterlimit: 10; stroke-width: 19px;"/>
+    <path d="M10.167,261.887c2.401-31.472,23.607-64.883,48.475-77.381" style="fill: none; stroke: #fff; stroke-linecap: round; stroke-miterlimit: 10; stroke-width: 9px;"/>
+  </g>
+  <circle cx="112.166" cy="199.149" r="47.362" style="fill: #c2c2c2;"/>
+  <path d="M225.995,394.774v66.64H10.115v-66.64l51.418-39.493c4.281-3.288,9.847-7.115,14.9-5.216,11.104,4.175,45.955,18.983,79.608-1.472,4.833-2.938,11.181,1.694,15.691,5.108l54.263,41.073Z" style="fill: #9d8871;"/>
+  <path d="M75.521,203.619c.051-25.288,16.2-41.054,35.349-42.65" style="fill: none; stroke: #fff; stroke-linecap: round; stroke-miterlimit: 10; stroke-width: 9px;"/>
+</svg>

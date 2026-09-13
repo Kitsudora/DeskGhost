@@ -1,11 +1,14 @@
+import { StickerController } from './sticker.js';
+import { mountCardLayers, createPaperTag, updatePaperTag, createNoteClip, fitCardText } from './paper.js';
+
 const SVG = 'http://www.w3.org/2000/svg';
-const CARD_WIDTH = 266;
-const CARD_HEIGHT = 184;
-const COLUMN_STEP = 350;
-const ROW_STEP = 232;
-const TOP = 88;
-const STATE_LABELS = { NotStarted: '未开始', InProgress: '进行中', Completed: '已完成', Stopped: '已停止' };
-const STATES = Object.keys(STATE_LABELS);
+const CARD_WIDTH = 310;
+const CARD_HEIGHT = CARD_WIDTH * 457.9779 / 621.3463;
+const COLUMN_STEP = 470;
+const ROW_STEP = 294;
+const TOP = 96;
+const PORT_OFFSET = 42;
+const STATE_LABELS = { NotStarted: 'TODO', InProgress: 'IN PROGRESS', Completed: 'DONE', Stopped: 'STOPPED' };
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const edgeKey = (source, target) => `${source}:${target}`;
 const pointFor = (task) => ({ x: task.column * COLUMN_STEP, y: TOP + task.row * ROW_STEP });
@@ -24,10 +27,10 @@ export function planConnection(tasks, links, sourceId, targetId) {
   const byId = tasks instanceof Map ? tasks : new Map(tasks.map(task => [task.id, task]));
   const source = byId.get(sourceId), target = byId.get(targetId);
   const reject = reason => ({ valid: false, reason });
-  if (!source || !target || source.deletedAt || target.deletedAt) return reject('请连接未删除的任务。');
-  if (sourceId === targetId) return reject('任务不能连接到自己。');
-  if (links.some(link => link.sourceId === sourceId && link.targetId === targetId)) return reject('这两个任务已经连接。');
-  if (links.length >= 8000) return reject('连线数量已达到上限。');
+  if (!source || !target || source.deletedAt || target.deletedAt) return reject('Connect tasks that have not been deleted.');
+  if (sourceId === targetId) return reject('A task cannot connect to itself.');
+  if (links.some(link => link.sourceId === sourceId && link.targetId === targetId)) return reject('These tasks are already connected.');
+  if (links.length >= 8000) return reject('The connection limit has been reached.');
   if (source.column < target.column) return { valid: true, column: target.column, row: target.row, movedCount: 0 };
   const outgoing = new Map();
   for (const link of links) {
@@ -38,7 +41,7 @@ export function planConnection(tasks, links, sourceId, targetId) {
   const pending = [targetId];
   while (pending.length) {
     const id = pending.pop();
-    if (id === sourceId) return reject('这条连接会形成循环，无法创建。');
+    if (id === sourceId) return reject('This connection would create a cycle.');
     if (descendants.has(id)) continue;
     descendants.add(id);
     for (const next of outgoing.get(id) || []) pending.push(next);
@@ -50,7 +53,7 @@ export function planConnection(tasks, links, sourceId, targetId) {
   let movedCount = 0;
   for (const task of order) {
     const column = columns.get(task.id) ?? task.column;
-    if (column > 255) return reject('连接后会超过 256 个时间列，请先调整任务位置。');
+    if (column > 255) return reject('This connection would exceed the 256-column limit.');
     if (column !== task.column) movedCount++;
     for (const next of outgoing.get(task.id) || []) {
       const original = byId.get(next);
@@ -139,12 +142,12 @@ export class TaskGraph {
     this.options = {};
     this.selection = new Set();
     this.cards = new Map();
+    this.stickers = new Map();
     this.tasks = new Map();
     this.positions = new Map();
     this.edges = new Map();
     this.incident = new Map();
     this.animations = new Map();
-    this.cameras = new Map();
     this.camera = { x: 66, y: 24, scale: 1 };
     this.frame = 0;
     this.pendingPointer = null;
@@ -153,10 +156,10 @@ export class TaskGraph {
     this.container.classList.add('dg-graph');
     this.container.tabIndex = 0;
     this.container.setAttribute('role', 'region');
-    this.container.setAttribute('aria-label', '任务图。拖动卡片移动，拖到最右侧新建时间列；拖动圆点连接任务，后续任务自动移到来源右侧；方向键移动，Alt 加方向键平移视图。');
+    this.container.setAttribute('aria-label', 'Task graph. Select a card to reveal its connection points. Drag cards to move them or to the bin. Shift and wheel scroll time slices; wheel scrolls overflowing rows.');
     this.stage = element('div', 'dg-graph-stage');
     this.columnsLayer = element('div', 'dg-columns');
-    this.edgeLayer = svgElement('svg', { class: 'dg-edges', 'aria-label': '任务关联' });
+    this.edgeLayer = svgElement('svg', { class: 'dg-edges', 'aria-label': 'Task connections' });
     const defs = svgElement('defs');
     const markerId = `dg-arrow-${TaskGraph.nextId++}`;
     const marker = svgElement('marker', { id: markerId, markerWidth: 7, markerHeight: 7, refX: 6, refY: 3.5, orient: 'auto', markerUnits: 'userSpaceOnUse' });
@@ -168,7 +171,7 @@ export class TaskGraph {
     this.edgeLayer.append(this.edgesGroup);
     this.cardsLayer = element('div', 'dg-cards');
     this.ghost = element('div', 'dg-snap-ghost');
-    this.ghost.append(element('span', '', '松开以吸附'));
+    this.ghost.append(element('span', '', 'Release to snap'));
     this.ghost.hidden = true;
     this.preview = svgElement('path', { class: 'dg-edge-preview', fill: 'none' });
     this.preview.style.display = 'none';
@@ -178,14 +181,11 @@ export class TaskGraph {
     this.linkHint.setAttribute('role', 'status');
     this.linkHint.hidden = true;
     this.empty = element('div', 'dg-graph-empty');
-    this.empty.append(element('span', 'dg-empty-symbol', '◇'), element('h2', '', '把想法，放在这里。'), element('p', '', '创建第一个任务，让每一步自然延续。'));
-    const create = button('dg-empty-create', '创建任务', '＋  新建任务');
-    create.addEventListener('click', () => callbacks.onCreate?.({ sourceIds: [], column: 0, row: 0 }));
+    this.empty.append(element('h2', '', 'No tasks yet'));
+    const create = button('dg-empty-create', 'Create task', '＋ NEW TASK');
+    create.addEventListener('click', () => callbacks.onCreate?.({ sourceIds: [] }));
     this.empty.append(create);
-    this.help = element('div', 'dg-graph-help');
-    this.help.append(element('span', '', '拖动圆点连接'), element('i'), element('span', '', '拖到最右侧新建阶段'), element('i'), element('span', '', '拖动空白平移'), element('i'), element('span', '', 'Ctrl + 滚轮缩放'));
-    this.zoomLabel = element('output', 'dg-zoom-label', '100%');
-    this.container.replaceChildren(this.stage, this.empty, this.help, this.zoomLabel, this.linkHint);
+    this.container.replaceChildren(this.stage, this.empty, this.linkHint);
     const events = { signal: this.abort.signal };
     this.container.addEventListener('pointerdown', (event) => this.pointerDown(event), events);
     this.container.addEventListener('pointermove', (event) => this.pointerMove(event), events);
@@ -195,21 +195,78 @@ export class TaskGraph {
     this.container.addEventListener('wheel', (event) => this.wheel(event), { ...events, passive: false });
     this.container.addEventListener('keydown', (event) => this.keyDown(event), events);
     this.container.addEventListener('dblclick', (event) => this.doubleClick(event), events);
-    this.resizeObserver = new ResizeObserver(() => this.applyCamera());
+    this.resizeObserver = new ResizeObserver(() => {
+      this.applyCamera();
+      this.fitTitles();
+    });
     this.resizeObserver.observe(container);
+    document.fonts?.ready.then(() => { if (!this.abort.signal.aborted) this.fitTitles(); });
     this.applyCamera();
   }
 
   get selectedIds() { return [...this.selection]; }
+
+  fitTitles() {
+    for (const card of this.cards.values()) fitCardText(card.querySelector('.dg-card-title'));
+  }
+
+  getCardRect(id) {
+    const card = this.cards.get(id);
+    if (!card) return null;
+    const rect = card.getBoundingClientRect();
+    return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+  }
+
+  setLiftedTask(id = null) {
+    this.liftedTaskId = id;
+    for (const [taskId, card] of this.cards) {
+      card.classList.toggle('is-lifted', taskId === id);
+      card.inert = taskId === id;
+    }
+  }
+
+  /** Client coordinates describe the proposed top-left of a normal-size card. */
+  previewPlacement(clientX, clientY, taskId = null) {
+    if (!this.workspace || this.options.categoryView || !Number.isFinite(clientX) || !Number.isFinite(clientY)) return { valid: false };
+    const bounds = this.container.getBoundingClientRect();
+    const position = this.worldPoint({ clientX, clientY });
+    const { column, row } = snapPosition(position, this.workspace.columns.length, this.tasks.values(), taskId);
+    const inside = clientX + CARD_WIDTH / 2 >= bounds.left && clientX + CARD_WIDTH / 2 <= bounds.right &&
+      clientY + CARD_HEIGHT / 2 >= bounds.top && clientY + CARD_HEIGHT / 2 <= bounds.bottom;
+    const valid = inside && (taskId === null || this.validMove(taskId, column));
+    const append = column === this.workspace.columns.length;
+    this.showPlacement({ column, row, valid, append });
+    return { column, row, valid, append, rect: {
+      left: bounds.left + this.camera.x + column * COLUMN_STEP,
+      top: bounds.top + this.camera.y + TOP + row * ROW_STEP,
+      width: CARD_WIDTH, height: CARD_HEIGHT
+    } };
+  }
+
+  showPlacement({ column, row, valid, append }) {
+    this.appendZone?.classList.toggle('is-active', append && valid);
+    this.ghost.hidden = false;
+    this.ghost.classList.toggle('is-invalid', !valid);
+    this.ghost.style.transform = `translate3d(${column * COLUMN_STEP}px, ${TOP + row * ROW_STEP}px, 0)`;
+    this.ghost.firstChild.textContent = valid ? String(column + 1).padStart(2, '0') : '×';
+  }
+
+  endPlacement() {
+    this.ghost.hidden = true;
+    this.appendZone?.classList.remove('is-active');
+  }
 
   setWorkspace(workspace, options = {}) {
     const previousPositions = new Map(this.positions);
     const changedWorkspace = this.workspace?.id !== workspace?.id;
     const changedView = Boolean(this.options.categoryView) !== Boolean(options.categoryView);
     if (changedWorkspace) {
-      if (this.workspace) this.cameras.set(this.workspace.id, { ...this.camera });
-      this.camera = this.cameras.get(workspace?.id) || { x: 66, y: 24, scale: 1 };
+      this.camera = { x: 66, y: 24, scale: 1 };
       this.selection.clear();
+      for (const sticker of this.stickers.values()) sticker.destroy();
+      this.stickers.clear();
+      this.cards.clear();
+      this.cardsLayer.replaceChildren();
     }
     this.cancelInteraction(false);
     this.animations.clear();
@@ -224,12 +281,13 @@ export class TaskGraph {
     this.render();
     if (!changedWorkspace && !changedView && !this.reducedMotion) {
       for (const [id, position] of this.positions) {
+        if (id === this.liftedTaskId) continue;
         const previous = previousPositions.get(id);
         if (previous && Math.hypot(position.x - previous.x, position.y - previous.y) > .5)
           this.animatePosition(id, previous, position);
       }
     }
-    if (changedView) this.fit();
+    if (changedView || changedWorkspace) this.latest();
     this.applyCamera();
     if (previousSelectionSize !== this.selection.size || changedWorkspace) this.callbacks.onSelect?.([...this.selection]);
   }
@@ -257,43 +315,48 @@ export class TaskGraph {
   }
 
   render() {
-    this.cards.clear();
+    const visibleIds = new Set(this.visibleTasks.map(task => task.id));
+    for (const [id, card] of this.cards) if (!visibleIds.has(id)) {
+      this.stickers.get(id)?.destroy();
+      this.stickers.delete(id);
+      card.remove();
+      this.cards.delete(id);
+    }
     this.positions.clear();
     this.edges.clear();
     this.incident.clear();
     this.selectedEdge = null;
-    this.cardsLayer.replaceChildren();
     this.columnsLayer.replaceChildren();
     this.appendZone = null;
     this.edgesGroup.replaceChildren();
     this.empty.hidden = this.visibleTasks.length !== 0 || !this.workspace;
     const history = this.options.history;
     if (this.empty.querySelector('h2')) {
-      this.empty.querySelector('h2').textContent = history === 'trash' ? '回收站是空的。' : history === 'archived' ? '这里，收藏走过的路。' : '把想法，放在这里。';
-      this.empty.querySelector('p').textContent = history === 'trash' ? '删除的任务可在这里找回。' : history === 'archived' ? '已完成或已停止的任务可以归档，关联历史会被保留。' : '创建第一个任务，让每一步自然延续。';
+      this.empty.querySelector('h2').textContent = history === 'trash' ? 'Recycle bin is empty' : history === 'archived' ? 'No archived tasks' : 'No tasks yet';
       this.empty.querySelector('button').hidden = !!history && history !== 'active' && history !== 'all';
     }
     if (!this.workspace) return;
     let lanes;
     if (this.options.categoryView) {
       const categories = [...new Set(this.visibleTasks.map(task => task.category))];
-      lanes = categories.map(category => ({ label: category || '未分类', tasks: this.visibleTasks.filter(task => task.category === category).sort((a, b) => a.column - b.column || a.row - b.row) }));
+      lanes = categories.map(category => ({ label: category || 'Uncategorized', tasks: this.visibleTasks.filter(task => task.category === category).sort((a, b) => a.column - b.column || a.row - b.row) }));
       lanes.forEach((lane, index) => lane.tasks.forEach((task, row) => this.positions.set(task.id, { x: index * COLUMN_STEP, y: TOP + row * ROW_STEP })));
     } else {
       lanes = this.workspace.columns.map((label, index) => ({ label, tasks: this.visibleTasks.filter(task => task.column === index) }));
       for (const task of this.visibleTasks) this.positions.set(task.id, pointFor(task));
     }
-    const maxRow = Math.max(1, ...this.visibleTasks.map(task => this.positions.get(task.id).y / ROW_STEP));
-    this.worldHeight = Math.max(700, (maxRow + 1) * ROW_STEP + TOP);
-    this.worldWidth = (Math.max(1, lanes.length) + (!this.options.categoryView && lanes.length < 256 ? 1 : 0)) * COLUMN_STEP;
+    this.contentHeight = Math.max(TOP + CARD_HEIGHT, ...[...this.positions.values()].map(position => position.y + CARD_HEIGHT)) + 40;
+    this.worldHeight = Math.max(this.container.clientHeight, this.contentHeight);
+    this.worldWidth = (Math.max(1, lanes.length) - 1 + (!this.options.categoryView && lanes.length < 256 ? 1 : 0)) * COLUMN_STEP + CARD_WIDTH;
     lanes.forEach((lane, index) => {
       const column = element('section', 'dg-column');
       column.style.transform = `translateX(${index * COLUMN_STEP}px)`;
       column.style.height = `${this.worldHeight}px`;
       const heading = element('div', 'dg-column-heading');
-      heading.append(element('span', 'dg-column-index', String(index + 1).padStart(2, '0')), element('h3', '', lane.label), element('span', 'dg-column-count', String(lane.tasks.length)));
+      if (this.options.categoryView) heading.append(element('h3', '', lane.label));
+      else heading.append(element('span', 'dg-column-index', String(index + 1).padStart(2, '0')));
       if (!this.options.categoryView && this.workspace.columns.length < 256) {
-        const add = button('dg-insert-column', '在此列后插入逻辑时间列', '+');
+        const add = button('dg-insert-column', 'Insert a logical column after this one', '+');
         add.addEventListener('click', () => this.commit('insertColumn', { index: index + 1 }));
         heading.append(add);
       }
@@ -306,10 +369,10 @@ export class TaskGraph {
       this.appendZone.dataset.column = String(nextColumn);
       this.appendZone.style.transform = `translateX(${nextColumn * COLUMN_STEP}px)`;
       this.appendZone.style.height = `${this.worldHeight}px`;
-      const add = button('dg-new-column-button', '新增时间列，也可以直接将卡片拖到这里', '＋ 新时间列');
+      const add = button('dg-new-column-button', 'Add a time slice, or drag a card here', '＋ ' + String(nextColumn + 1).padStart(2, '0'));
       add.addEventListener('click', () => this.commit('insertColumn', { index: nextColumn }));
       const label = element('div', 'dg-new-column-label');
-      label.append(element('span', '', '拖到这里'), element('strong', '', '新建时间列'), element('small', '', '松开后创建，并移入卡片'));
+      label.append(element('strong', '', String(nextColumn + 1).padStart(2, '0')));
       this.appendZone.append(add, label);
       this.columnsLayer.append(this.appendZone);
     }
@@ -319,78 +382,93 @@ export class TaskGraph {
         if (this.cards.has(link.sourceId) && this.cards.has(link.targetId)) this.renderEdge(link);
       }
     }
-    this.help.hidden = this.options.categoryView;
     this.updateSelection();
   }
 
   renderCard(task) {
-    const card = element('article', 'dg-task-card');
-    card.dataset.taskId = task.id;
+    let card = this.cards.get(task.id);
+    if (!card) {
+      card = element('article', 'dg-task-card');
+      card.dataset.taskId = task.id;
+      card.tabIndex = 0;
+      const surface = element('div', 'dg-card-surface');
+      mountCardLayers(surface);
+      const stickerSlot = element('div', 'dg-sticker-slot');
+      stickerSlot.addEventListener('pointerdown', event => { if (event.button === 0) this.select(task.id); }, { capture: true });
+      stickerSlot.addEventListener('focusin', () => { if (this.selection.size !== 1 || !this.selection.has(task.id)) this.select(task.id); });
+      const ribbon = element('div', 'dg-title-ribbon');
+      ribbon.append(element('h3', 'dg-card-title'));
+      const tags = element('div', 'dg-card-tags');
+      for (const kind of ['workspace', 'category']) tags.append(createPaperTag({
+        kind, onClick: () => this.callbacks.onEdit?.(task.id, { tag: kind })
+      }));
+      const noteClip = createNoteClip({ onClick: () => this.callbacks.onEdit?.(task.id, { notes: true }) });
+      surface.append(tags, stickerSlot, ribbon, element('p', 'dg-card-description'), noteClip);
+      card.append(surface, element('div', 'dg-card-actions'));
+      this.cardsLayer.append(card);
+      this.cards.set(task.id, card);
+      this.stickers.set(task.id, new StickerController(stickerSlot, {
+        state: task.state,
+        disabled: !!task.isArchived || !!task.deletedAt,
+        onChange: state => this.commit('setState', { taskId: task.id, state })
+      }));
+    }
     card.dataset.state = task.state;
-    card.tabIndex = 0;
-    card.setAttribute('aria-label', `${task.title}，${STATE_LABELS[task.state] || task.state}，第 ${task.column + 1} 阶段`);
+    card.setAttribute('aria-label', `${task.title}, ${STATE_LABELS[task.state] || task.state}, column ${task.column + 1}`);
     card.classList.toggle('is-dimmed', !this.matches(task));
     card.classList.toggle('is-archived', !!task.isArchived);
     card.classList.toggle('is-deleted', !!task.deletedAt);
-    const head = element('div', 'dg-card-top');
-    const state = button('dg-task-state', task.isArchived ? '已归档，恢复后可修改状态' : '点击切换任务状态', '');
-    state.dataset.state = task.state;
-    state.append(element('i', 'dg-state-dot'), element('span', '', STATE_LABELS[task.state] || task.state));
-    state.disabled = !!task.isArchived || !!task.deletedAt;
-    state.addEventListener('click', () => this.commit('setState', { taskId: task.id, state: STATES[(STATES.indexOf(task.state) + 1) % STATES.length] }));
-    const more = element('div', 'dg-card-actions');
+    card.classList.toggle('is-lifted', task.id === this.liftedTaskId);
+    card.inert = task.id === this.liftedTaskId;
+    this.stickers.get(task.id).update(task.state, { disabled: !!task.isArchived || !!task.deletedAt });
+    const more = card.querySelector('.dg-card-actions');
+    more.replaceChildren();
     if (!task.deletedAt) {
-      const follow = button('dg-card-action', '创建后续任务', '↗');
-      follow.addEventListener('click', () => {
-        const sourceIds = this.selection.has(task.id) ? [...this.selection].filter(id => !this.tasks.get(id)?.deletedAt) : [task.id];
-        this.callbacks.onCreate?.({ sourceIds, column: Math.max(...sourceIds.map(id => this.tasks.get(id).column)) + 1 });
-      });
-      more.append(follow);
       if (task.isArchived || task.state === 'Completed' || task.state === 'Stopped') {
-        const archive = button('dg-card-action', task.isArchived ? '恢复归档任务' : '归档任务', task.isArchived ? '↶' : '↓');
+        const archive = button('dg-card-action', task.isArchived ? 'Restore archived task' : 'Archive task', task.isArchived ? '↶' : '↓');
         archive.addEventListener('click', () => this.commit(task.isArchived ? 'unarchiveTask' : 'archiveTask', { taskId: task.id }));
         more.append(archive);
       }
-      const remove = button('dg-card-action dg-delete-action', '移至回收站（可撤销）', '×');
-      remove.addEventListener('click', () => this.commit('deleteTask', { taskId: task.id }));
-      more.append(remove);
     } else {
-      const restore = button('dg-card-action', '恢复任务', '↶');
+      const restore = button('dg-card-action', 'Restore task', '↶');
       restore.addEventListener('click', () => this.commit('restoreTask', { taskId: task.id }));
       more.append(restore);
     }
-    head.append(state, more);
-    const title = element('h3', 'dg-card-title', task.title);
-    const description = element('p', 'dg-card-description', task.description || '双击卡片，记录想法…');
+    const title = card.querySelector('.dg-card-title');
+    title.textContent = task.title;
+    title.title = task.title;
+    fitCardText(title);
+    const description = card.querySelector('.dg-card-description');
+    description.textContent = task.description || '';
     description.classList.toggle('is-placeholder', !task.description);
-    const footer = element('div', 'dg-card-footer');
-    footer.append(element('span', 'dg-category-pill', task.category || '未分类'));
-    if (task.isArchived) footer.append(element('span', 'dg-card-meta', '已归档'));
-    else footer.append(element('span', 'dg-card-grip', '⠿'));
-    card.append(head, title, description, footer);
+    updatePaperTag(card.querySelector('[data-tag="workspace"]'), {
+      label: this.options.workspaceName ?? this.workspace.name,
+      key: this.options.workspaceId ?? this.workspace.id
+    });
+    updatePaperTag(card.querySelector('[data-tag="category"]'), { label: task.category || 'Uncategorized', key: task.category || '' });
+    card.querySelector('.dg-note-clip').hidden = !task.notes?.trim();
+    for (const port of card.querySelectorAll('.dg-port')) port.remove();
     if (!task.deletedAt && !this.options.categoryView) {
       for (const side of ['in', 'out']) {
-        const port = button(`dg-port dg-port-${side}`, side === 'in' ? '拖动以连接来源任务' : '拖动以连接后续任务', '');
+        const port = button(`dg-port dg-port-${side}`, side === 'in' ? 'Drag to connect a source task' : 'Drag to connect a follow-up task', '');
         port.dataset.port = side;
         port.dataset.taskId = task.id;
         port.addEventListener('click', event => { if (event.detail === 0) this.keyboardPort(task.id, side); });
         card.append(port);
       }
     }
-    this.cardsLayer.append(card);
-    this.cards.set(task.id, card);
     this.paintCard(task.id);
   }
 
   renderEdge(link) {
     const key = edgeKey(link.sourceId, link.targetId);
-    const group = svgElement('g', { class: 'dg-edge', 'data-edge-key': key, tabindex: 0, role: 'button', 'aria-label': `${this.tasks.get(link.sourceId)?.title} → ${this.tasks.get(link.targetId)?.title}，按 Delete 断开` });
+    const group = svgElement('g', { class: 'dg-edge', 'data-edge-key': key, tabindex: 0, role: 'button', 'aria-label': `${this.tasks.get(link.sourceId)?.title} → ${this.tasks.get(link.targetId)?.title}. Press Delete to disconnect.` });
     const hit = svgElement('path', { class: 'dg-edge-hit', fill: 'none' });
     const line = svgElement('path', { class: 'dg-edge-line', fill: 'none', 'marker-end': `url(#${this.markerId})` });
     const sourceHandle = svgElement('circle', { class: 'dg-edge-handle', r: 6, 'data-endpoint': 'source', 'data-edge-key': key });
     const targetHandle = svgElement('circle', { class: 'dg-edge-handle', r: 6, 'data-endpoint': 'target', 'data-edge-key': key });
     const hint = svgElement('title');
-    hint.textContent = '拖动连线端点以改接；拖到空白处断开';
+    hint.textContent = 'Drag an endpoint to reconnect; drop on empty space to disconnect.';
     group.append(hint, hit, line, sourceHandle, targetHandle);
     this.edgesGroup.append(group);
     this.edges.set(key, { ...link, group, hit, line, sourceHandle, targetHandle });
@@ -409,7 +487,7 @@ export class TaskGraph {
 
   portPosition(id, side) {
     const position = this.positions.get(id);
-    return position && { x: position.x + (side === 'out' ? CARD_WIDTH : 0), y: position.y + CARD_HEIGHT / 2 };
+    return position && { x: position.x + (side === 'out' ? CARD_WIDTH + PORT_OFFSET : -PORT_OFFSET), y: position.y + CARD_HEIGHT / 2 };
   }
 
   paintEdge(key) {
@@ -433,7 +511,10 @@ export class TaskGraph {
       card.classList.toggle('is-selected', this.selection.has(id));
       card.setAttribute('aria-selected', String(this.selection.has(id)));
     }
-    for (const [key, edge] of this.edges) edge.group.classList.toggle('is-selected', this.selectedEdge === key);
+    for (const [key, edge] of this.edges) {
+      edge.group.classList.toggle('is-selected', this.selectedEdge === key);
+      edge.group.classList.toggle('has-selected-task', this.selection.has(edge.sourceId) || this.selection.has(edge.targetId));
+    }
   }
 
   select(id, additive = false) {
@@ -455,8 +536,6 @@ export class TaskGraph {
     this.camera.y = this.container.clientHeight / 2 - (position.y + CARD_HEIGHT / 2) * this.camera.scale;
     this.applyCamera();
     const card = this.cards.get(id);
-    card.classList.remove('is-located');
-    void card.offsetWidth;
     card.classList.add('is-located');
     card.focus({ preventScroll: true });
     return true;
@@ -468,14 +547,13 @@ export class TaskGraph {
   }
 
   capture(event) {
-    this.interaction.panOrigin = { x: this.camera.x, y: this.camera.y };
     this.interaction.lastPanTime = performance.now();
     this.container.setPointerCapture(event.pointerId);
     this.container.classList.add('is-interacting');
   }
 
   pointerDown(event) {
-    if (!this.workspace || (event.button !== 0 && event.button !== 1) || this.interaction) return;
+    if (!this.workspace || event.button !== 0 || this.interaction) return;
     const target = event.target;
     const point = this.worldPoint(event);
     const endpoint = target.closest('[data-endpoint]');
@@ -487,6 +565,7 @@ export class TaskGraph {
       const edge = this.edges.get(endpoint.dataset.edgeKey);
       this.interaction = { type: 'link', pointerId: event.pointerId, edge, endpoint: endpoint.dataset.endpoint, start: point, moved: false };
       edge.group.classList.add('is-rewiring');
+      this.container.classList.add('is-linking');
       this.capture(event);
       this.paintLinkPreview(point);
       return;
@@ -509,7 +588,7 @@ export class TaskGraph {
       edgeNode.focus({ preventScroll: true });
       return;
     }
-    if (card && event.button === 0 && !event.altKey) {
+    if (card && !card.inert && event.button === 0 && !event.altKey) {
       event.preventDefault();
       const id = card.dataset.taskId;
       if (event.ctrlKey || event.metaKey) this.select(id, true);
@@ -523,8 +602,7 @@ export class TaskGraph {
     }
     event.preventDefault();
     this.container.focus({ preventScroll: true });
-    this.interaction = { type: 'pan', pointerId: event.pointerId, startClient: { x: event.clientX, y: event.clientY }, origin: { ...this.camera }, moved: false, preserveSelection: event.altKey || event.button === 1 };
-    this.capture(event);
+    this.select(null);
   }
 
   pointerMove(event) {
@@ -537,16 +615,6 @@ export class TaskGraph {
     const interaction = this.interaction;
     if (!interaction) return;
     interaction.lastPointer = { clientX: event.clientX, clientY: event.clientY };
-    if (interaction.type === 'pan') {
-      const dx = event.clientX - interaction.startClient.x;
-      const dy = event.clientY - interaction.startClient.y;
-      interaction.moved ||= Math.hypot(dx, dy) > 3;
-      this.camera.x = interaction.origin.x + dx;
-      this.camera.y = interaction.origin.y + dy;
-      this.container.classList.toggle('is-panning', interaction.moved);
-      this.applyCamera();
-      return;
-    }
     const point = this.worldPoint(event);
     interaction.moved ||= Math.hypot(point.x - interaction.start.x, point.y - interaction.start.y) * this.camera.scale > 4;
     if (interaction.type === 'card' && interaction.moved) {
@@ -555,15 +623,14 @@ export class TaskGraph {
       this.paintCard(interaction.id);
       for (const key of this.incident.get(interaction.id) || []) this.paintEdge(key);
       this.cards.get(interaction.id).classList.add('is-dragging');
+      interaction.trash = !!this.callbacks.isTrashPoint?.(event.clientX, event.clientY);
+      this.callbacks.onTrashHover?.(interaction.trash);
       const { column, row } = snapPosition(position, this.workspace.columns.length, this.tasks.values(), interaction.id);
       const valid = this.validMove(interaction.id, column);
       const appending = column === this.workspace.columns.length;
       interaction.drop = { column, row, valid };
-      this.appendZone?.classList.toggle('is-active', appending && valid);
-      this.ghost.hidden = false;
-      this.ghost.classList.toggle('is-invalid', !valid);
-      this.ghost.style.transform = `translate3d(${column * COLUMN_STEP}px, ${TOP + row * ROW_STEP}px, 0)`;
-      this.ghost.firstChild.textContent = valid ? appending ? `松开以新建第 ${column + 1} 阶段，并移入卡片` : `第 ${column + 1} 阶段 · 松开以吸附` : '后续任务必须位于来源右侧';
+      if (interaction.trash) this.endPlacement();
+      else this.showPlacement({ column, row, valid, append: appending });
     } else if (interaction.type === 'link') {
       interaction.targetId = this.linkTarget(event, interaction);
       for (const [id, node] of this.cards) node.classList.toggle('is-link-target', id === interaction.targetId);
@@ -579,15 +646,15 @@ export class TaskGraph {
     this.pendingPointer = null;
     this.finishInteractionUi();
     if (this.container.hasPointerCapture(event.pointerId)) this.container.releasePointerCapture(event.pointerId);
-    if (interaction.type === 'pan') {
-      if (!interaction.moved && !interaction.preserveSelection) this.select(null);
-      return;
-    }
     if (interaction.type === 'card' && interaction.moved) {
+      if (interaction.trash) {
+        this.dropToTrash(interaction.id);
+        return;
+      }
       const drop = interaction.drop;
       const target = drop?.valid ? { x: drop.column * COLUMN_STEP, y: TOP + drop.row * ROW_STEP } : pointFor(this.tasks.get(interaction.id));
       this.animatePosition(interaction.id, this.positions.get(interaction.id), target);
-      if (!drop?.valid) this.toast('后续任务必须保持在全部来源的右侧。');
+      if (!drop?.valid) this.toast('Follow-up tasks must stay to the right of every source.');
       else {
         const task = this.tasks.get(interaction.id);
         if (drop.column !== task.column || drop.row !== task.row) this.commit('moveTask', { taskId: interaction.id, column: drop.column, row: drop.row }, () => this.animatePosition(interaction.id, this.positions.get(interaction.id), pointFor(task)));
@@ -601,12 +668,13 @@ export class TaskGraph {
         } else this.commit('connectTask', { sourceId, targetId: nextId });
       } else if (interaction.edge && !document.elementFromPoint(event.clientX, event.clientY)?.closest('.dg-task-card')) {
         this.commit('removeLink', { sourceId: interaction.edge.sourceId, targetId: interaction.edge.targetId });
-        this.toast('已断开连线，可按 Ctrl + Z 撤销。');
-      } else this.toast(interaction.targetPlan?.reason || '把连线拖到另一张任务卡片；后续任务会自动移到来源右侧。');
+        this.toast('Connection removed. Press Ctrl + Z to undo.');
+      } else this.toast(interaction.targetPlan?.reason || 'Drag to another card. Follow-up tasks move to the right of their sources.');
     }
   }
 
   finishInteractionUi() {
+    this.callbacks.onTrashHover?.(false);
     this.ghost.hidden = true;
     this.preview.style.display = 'none';
     this.linkHint.hidden = true;
@@ -624,6 +692,20 @@ export class TaskGraph {
     this.finishInteractionUi();
     if (interaction?.type === 'card' && restore && this.tasks.has(interaction.id)) this.animatePosition(interaction.id, this.positions.get(interaction.id), pointFor(this.tasks.get(interaction.id)));
     if (interaction && this.container.hasPointerCapture(interaction.pointerId)) this.container.releasePointerCapture(interaction.pointerId);
+  }
+
+  async dropToTrash(id) {
+    const card = this.cards.get(id), task = this.tasks.get(id);
+    card?.classList.add('is-discarding');
+    try {
+      const saved = this.callbacks.onTrash ? await this.callbacks.onTrash(id) : await this.commit('deleteTask', { taskId: id });
+      if (saved === false && task) this.animatePosition(id, this.positions.get(id), pointFor(task));
+    } catch (error) {
+      if (task) this.animatePosition(id, this.positions.get(id), pointFor(task));
+      this.toast(error?.message || 'The task could not be moved to the bin.');
+    } finally {
+      card?.classList.remove('is-discarding');
+    }
   }
 
   linkPair(interaction, targetId) {
@@ -645,7 +727,7 @@ export class TaskGraph {
     const source = this.tasks.get(sourceId);
     const target = this.tasks.get(targetId);
     interaction.targetPlan = interaction.edge
-      ? { valid: validateConnection(source, target, this.workspace.links, interaction.edge), reason: '改接时，后续任务必须保持在来源右侧。', column: target?.column, row: target?.row, movedCount: 0 }
+      ? { valid: validateConnection(source, target, this.workspace.links, interaction.edge), reason: 'Reconnecting must keep the follow-up task to the right of its source.', column: target?.column, row: target?.row, movedCount: 0 }
       : planConnection(this.tasks, this.workspace.links, sourceId, targetId);
     return interaction.targetPlan.valid ? candidate : null;
   }
@@ -668,11 +750,11 @@ export class TaskGraph {
       const plan = interaction.targetPlan;
       if (plan?.movedCount) {
         const position = { x: plan.column * COLUMN_STEP, y: TOP + plan.row * ROW_STEP };
-        end = { x: position.x, y: position.y + CARD_HEIGHT / 2 };
+        end = { x: position.x - PORT_OFFSET, y: position.y + CARD_HEIGHT / 2 };
         this.ghost.hidden = false;
         this.ghost.classList.remove('is-invalid');
         this.ghost.style.transform = `translate3d(${position.x}px, ${position.y}px, 0)`;
-        this.ghost.firstChild.textContent = '连接后的位置';
+        this.ghost.firstChild.textContent = 'Position after connecting';
       } else this.ghost.hidden = true;
     } else this.ghost.hidden = true;
     const plan = interaction.targetPlan;
@@ -680,8 +762,8 @@ export class TaskGraph {
     if (plan) {
       this.linkHint.classList.toggle('is-invalid', !plan.valid);
       this.linkHint.textContent = !plan.valid ? plan.reason : plan.movedCount
-        ? `连接并移到第 ${plan.column + 1} 阶段${plan.movedCount > 1 ? ` · 同时右移 ${plan.movedCount - 1} 个后续任务` : ''}`
-        : interaction.edge ? '松开以改接' : '松开以连接';
+        ? `Connect and move to column ${plan.column + 1}${plan.movedCount > 1 ? ` · ${plan.movedCount - 1} follow-up tasks also move` : ''}`
+        : interaction.edge ? 'Release to reconnect' : 'Release to connect';
       this.linkHint.style.left = `${clamp(point.x * this.camera.scale + this.camera.x + 20, 12, Math.max(12, this.container.clientWidth - 320))}px`;
       this.linkHint.style.top = `${clamp(point.y * this.camera.scale + this.camera.y + 24, 12, Math.max(12, this.container.clientHeight - 70))}px`;
     }
@@ -718,7 +800,7 @@ export class TaskGraph {
 
   panAtEdge(time) {
     const interaction = this.interaction;
-    if (!interaction?.moved || interaction.type === 'pan' || !interaction.lastPointer) return false;
+    if (!interaction?.moved || interaction.trash || !interaction.lastPointer) return false;
     const rect = this.container.getBoundingClientRect();
     const pointer = interaction.lastPointer;
     const elapsed = clamp((time - interaction.lastPanTime) / 1000, 0, .04);
@@ -730,13 +812,11 @@ export class TaskGraph {
       return 0;
     };
     const vx = speed(pointer.clientX - rect.left, rect.width);
-    const vy = speed(pointer.clientY - rect.top, rect.height);
+    const vy = this.verticalOverflow ? speed(pointer.clientY - rect.top, rect.height) : 0;
     if (!vx && !vy) return false;
-    const scale = this.camera.scale;
-    const minX = Math.min(interaction.panOrigin.x, rect.width - (this.worldWidth + 60) * scale);
-    const minY = Math.min(interaction.panOrigin.y, rect.height - (this.worldHeight + ROW_STEP) * scale);
-    const x = clamp(this.camera.x - vx * elapsed, minX, Math.max(66, interaction.panOrigin.x));
-    const y = clamp(this.camera.y - vy * elapsed, minY, Math.max(24, interaction.panOrigin.y));
+    const { minX, minY } = this.cameraBounds();
+    const x = clamp(this.camera.x - vx * elapsed, minX, 66);
+    const y = clamp(this.camera.y - vy * elapsed, minY, 24);
     if (Math.abs(x - this.camera.x) + Math.abs(y - this.camera.y) < .01) return false;
     this.camera.x = x;
     this.camera.y = y;
@@ -779,52 +859,45 @@ export class TaskGraph {
   }
 
   applyCamera() {
-    this.stage.style.transform = `translate3d(${this.camera.x}px, ${this.camera.y}px, 0) scale(${this.camera.scale})`;
-    this.container.style.setProperty('--graph-scale', this.camera.scale);
-    this.zoomLabel.value = `${Math.round(this.camera.scale * 100)}%`;
-    this.zoomLabel.textContent = this.zoomLabel.value;
+    const { minX, minY } = this.cameraBounds();
+    this.camera.scale = 1;
+    this.camera.x = clamp(this.camera.x, minX, 66);
+    this.camera.y = clamp(this.camera.y, minY, 24);
+    this.stage.style.transform = `translate3d(${this.camera.x}px, ${this.camera.y}px, 0)`;
+    this.container.style.setProperty('--graph-scale', 1);
   }
 
-  zoomBy(factor, point) {
-    const rect = this.container.getBoundingClientRect();
-    const anchor = point || { x: rect.width / 2, y: rect.height / 2 };
-    const previous = this.camera.scale;
-    const next = clamp(previous * factor, .35, 1.65);
-    this.camera.x = anchor.x - (anchor.x - this.camera.x) * next / previous;
-    this.camera.y = anchor.y - (anchor.y - this.camera.y) * next / previous;
-    this.camera.scale = next;
+  get verticalOverflow() {
+    return (this.contentHeight || 0) + 24 > this.container.clientHeight;
+  }
+
+  cameraBounds() {
+    return {
+      minX: Math.min(66, this.container.clientWidth - (this.worldWidth || CARD_WIDTH) - 66),
+      minY: this.verticalOverflow ? this.container.clientHeight - this.contentHeight : 24
+    };
+  }
+
+  latest() {
+    const lastColumn = this.options.categoryView
+      ? Math.max(0, ...[...this.positions.values()].map(position => position.x / COLUMN_STEP))
+      : Math.max(0, (this.workspace?.columns.length || 1) - 1);
+    this.camera = { x: this.container.clientWidth / 2 - lastColumn * COLUMN_STEP - CARD_WIDTH / 2, y: 24, scale: 1 };
     this.applyCamera();
   }
 
-  fit() {
-    if (!this.positions.size) {
-      this.camera = { x: 66, y: 24, scale: 1 };
-    } else {
-      const positions = [...this.positions.values()];
-      const minX = Math.min(...positions.map(p => p.x));
-      const minY = Math.min(...positions.map(p => p.y)) - TOP;
-      const maxX = Math.max(...positions.map(p => p.x), this.appendZone ? this.workspace.columns.length * COLUMN_STEP : 0) + CARD_WIDTH;
-      const maxY = Math.max(...positions.map(p => p.y)) + CARD_HEIGHT;
-      const width = this.container.clientWidth;
-      const height = this.container.clientHeight;
-      const scale = clamp(Math.min((width - 120) / (maxX - minX), (height - 100) / (maxY - minY)), .35, 1);
-      this.camera = { x: (width - (maxX - minX) * scale) / 2 - minX * scale, y: Math.max(18, (height - (maxY - minY) * scale) / 2) - minY * scale, scale };
-    }
-    this.applyCamera();
-  }
+  // Retained as the toolbar's reset command; physical cards always keep scale 1.
+  fit() { this.latest(); }
 
   wheel(event) {
-    if (event.target.closest('input, textarea, select') || this.interaction) return;
+    if (event.target.closest('input, textarea, select')) return;
     event.preventDefault();
-    if (event.ctrlKey || event.metaKey) {
-      const rect = this.container.getBoundingClientRect();
-      this.zoomBy(Math.exp(-clamp(event.deltaY, -200, 200) * .002), { x: event.clientX - rect.left, y: event.clientY - rect.top });
-    } else {
-      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? this.container.clientHeight : 1;
-      this.camera.x -= clamp((event.shiftKey ? event.deltaY : event.deltaX) * unit, -1200, 1200);
-      this.camera.y -= event.shiftKey ? 0 : clamp(event.deltaY * unit, -1200, 1200);
-      this.applyCamera();
-    }
+    if (event.ctrlKey || event.metaKey) return;
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? this.container.clientHeight : 1;
+    if (event.shiftKey) this.camera.x -= clamp((event.deltaY || event.deltaX) * unit, -1200, 1200);
+    else if (this.verticalOverflow) this.camera.y -= clamp(event.deltaY * unit, -1200, 1200);
+    this.applyCamera();
+    if (this.interaction?.lastPointer) this.processPointer(this.interaction.lastPointer);
   }
 
   doubleClick(event) {
@@ -868,15 +941,14 @@ export class TaskGraph {
       return;
     }
     if (event.key === '0' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); this.fit(); return; }
-    if (event.key === '+' || event.key === '=') { event.preventDefault(); this.zoomBy(1.12); return; }
-    if (event.key === '-') { event.preventDefault(); this.zoomBy(1 / 1.12); return; }
+    if (event.key === '+' || event.key === '=' || event.key === '-') { event.preventDefault(); return; }
     const directions = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
     const direction = directions[event.key];
     if (!direction) return;
     if (event.altKey || this.selection.size !== 1) {
       event.preventDefault();
       this.camera.x -= direction[0] * 80;
-      this.camera.y -= direction[1] * 80;
+      if (this.verticalOverflow) this.camera.y -= direction[1] * 80;
       this.applyCamera();
     } else if (!this.options.categoryView) {
       event.preventDefault();
@@ -885,7 +957,7 @@ export class TaskGraph {
       const column = clamp(task.column + direction[0], 0, Math.min(255, this.workspace.columns.length));
       const row = this.freeRow(column, clamp(task.row + direction[1], 0, 4095), task.id);
       if (this.validMove(task.id, column)) this.commit('moveTask', { taskId: task.id, column, row });
-      else this.toast('此位置会违反任务的前后关系。');
+      else this.toast('This position would violate the task order.');
     }
   }
 
@@ -896,7 +968,7 @@ export class TaskGraph {
       return true;
     } catch (error) {
       onError?.();
-      this.toast(error?.message || '操作未完成，已有数据保持不变。');
+      this.toast(error?.message || 'The operation could not be completed. Existing data is unchanged.');
       return false;
     }
   }
@@ -911,7 +983,7 @@ export class TaskGraph {
     if (!this.keyboardLink) {
       this.keyboardLink = { taskId, side };
       this.container.classList.add('is-linking');
-      this.toast('用 Tab 移至另一张卡片的圆点并按 Enter 连接；Esc 取消。');
+      this.toast('Drag between two ports to connect. Tab and Enter also work. Esc cancels.');
       return;
     }
     const pair = this.linkPair(this.keyboardLink, taskId);
@@ -922,7 +994,7 @@ export class TaskGraph {
     }
     this.keyboardLink = null;
     this.container.classList.remove('is-linking');
-    if (plan.movedCount) this.toast(`连接后移到第 ${plan.column + 1} 阶段${plan.movedCount > 1 ? '，并右移必要的后续任务' : ''}。`);
+    if (plan.movedCount) this.toast(`Connecting moves this task to column ${plan.column + 1}${plan.movedCount > 1 ? ' and shifts its affected follow-up tasks' : ''}.`);
     this.commit('connectTask', pair);
   }
 
@@ -933,6 +1005,9 @@ export class TaskGraph {
     cancelAnimationFrame(this.frame);
     this.frame = 0;
     this.animations.clear();
+    for (const sticker of this.stickers.values()) sticker.destroy();
+    this.stickers.clear();
+    this.cards.clear();
     this.container.replaceChildren();
   }
 }

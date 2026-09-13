@@ -1,0 +1,99 @@
+{
+  "formatVersion": 1,
+  "coordinateSystem": "SVG source user units; bounds are [x, y, width, height]",
+  "layout": {
+    "referenceCardBody": [0, 0, 621.3463, 457.9779],
+    "sourceToBody": "For a source point subtract its card body origin, then multiply both axes by renderedBodyWidth / sourceBodyWidth.",
+    "layerCss": "left=-body.x/body.width*100%; top=-body.y/body.height*100%; width=viewBox.width/body.width*100%; height=viewBox.height/body.height*100%.",
+    "typography": "The requested Illustrator point sizes correspond to these exported SVG user-unit sizes. Scale with the artwork; CSS pt would add an unwanted 4/3 conversion.",
+    "shadow": "Each shadow is a separate original path with fill #363636 and opacity .87. Keep the outer layer at opacity 1."
+  },
+  "front": {
+    "source": "assets/SVG/card_example_done.svg",
+    "sourceSha256": "f5f4192f574ff0eb6f749c068f3f11dd0de297ec0ca10d54e6848cb2a38f9cde",
+    "viewBox": [0, 0, 727.7653, 520.206],
+    "body": [74.9782, 52.6111, 621.3463, 457.9779],
+    "bodyRadius": 65.1515,
+    "surfaceFile": "card-front.svg",
+    "shadowFile": "card-front-shadow.svg",
+    "surfaceIncludes": ["body", "description paper inset", "title ribbon", "ribbon return"],
+    "descriptionPaper": [91.1386, 217.0916, 589.0257, 275.5586],
+    "titleRibbon": [226.3344, 111.5252, 491.7447, 102.758],
+    "title": {
+      "outlinedInkBounds": [299.619, 124.8249, 302.9521, 68.4004],
+      "baselineY": 193.2252,
+      "fontFamily": "Bungee",
+      "fontWeight": 400,
+      "fontSizeSourceUnits": 95
+    },
+    "description": {
+      "outlinedInkBounds": [139.8499, 246.3536, 466.2612, 158.4716],
+      "suggestedEditableBounds": [139.8499, 231.238, 466.2612, 211.2],
+      "firstBaselineY": 270.438,
+      "baselineStep": 43.2
+    }
+  },
+  "back": {
+    "source": "assets/SVG/card_back_example.svg",
+    "sourceSha256": "f25e7f300160b1b4d9cf8a83aa4656e5ff8707a47959b5696f86d59c3de14493",
+    "viewBox": [0, 0, 741.387, 520.206],
+    "body": [45.072, 52.612, 621.346, 457.978],
+    "bodyRadius": 65.151,
+    "surfaceFile": "card-back.svg",
+    "shadowFile": "card-back-shadow.svg",
+    "surfaceIncludes": ["blank sticker reverse silhouette", "body", "metadata ribbon", "ribbon return"],
+    "separateParts": { "body": "card-back-body.svg", "band": "card-back-band.svg", "sticker": "card-back-sticker.svg" },
+    "partsNote": "The separate parts use the same viewBox and are alternatives to the combined surface; do not draw them twice.",
+    "metadataBand": [23.316, 111.525, 491.745, 114.845],
+    "id": { "outlinedInkBounds": [59.896, 123.859, 446.411, 9.737], "baselineY": 133.377, "fontSizeSourceUnits": 18 },
+    "createdAt": { "outlinedInkBounds": [61.335, 144.495, 436.529, 16.45], "baselineY": 160.945, "fontSizeSourceUnits": 30 },
+    "metadataFont": "BankGothic Lt BT Light when installed; otherwise bundled Orbitron Regular. A small horizontal stretch may be applied by the host layout.",
+    "workspaceTag": [524.184, 216.825, 208.555, 44.23],
+    "categoryTag": [464.95, 269.101, 272.12, 44.23],
+    "notePaperOutlinedBounds": [48.8521, 233.062, 383.7733, 242.1117],
+    "noteRotationDegrees": 2.615,
+    "paperclipSourceOffset": [0, 223.467]
+  },
+  "tags": {
+    "source": "assets/SVG/tag_example.svg",
+    "sourceSha256": "d35ed62ad465c4495cb80dddc851468316f298ead9ee03568ee597c2c0ea8b89",
+    "sourceViewBox": [0, 0, 272.12, 134.145],
+    "coloring": "The SVG contains only an opaque arrow polygon. Use it as a CSS mask with background-color for deterministic per-tag colors; no example letters are retained.",
+    "fontFamily": "Smiley Sans",
+    "fontWeight": 400,
+    "fontSizeSourceUnits": 30,
+    "fontStyle": "normal (the supplied face is inherently oblique)",
+    "workspace": {
+      "file": "tag-workspace.svg", "viewBox": [0, 0, 208.555, 44.23], "sourceOffset": [1.532, 0],
+      "outlinedInkBounds": [18.539, 9.933, 138.509, 24.841], "baselineY": 34.473,
+      "suggestedEditableBounds": [18.539, 0, 151.706, 44.23]
+    },
+    "category": {
+      "file": "tag-category.svg", "viewBox": [0, 0, 272.12, 44.23], "sourceOffset": [0, 83.872],
+      "outlinedInkBounds": [17.5352, 9.931, 207.5518, 24.842], "baselineY": 34.473,
+      "suggestedEditableBounds": [17.5352, 0, 214.2748, 44.23]
+    }
+  },
+  "note": {
+    "source": "assets/SVG/note_example.svg",
+    "sourceSha256": "f20a0354028e9fe528f9a025c807d474337e4ebbb69d7c4e8644fe4d8ac36739",
+    "viewBox": [0, 0, 419.118, 232.955],
+    "paperFile": "note-paper.svg",
+    "paperBody": [45.234, 7.667, 373.884, 225.288],
+    "paperInset": [50.06, 12.153, 364.232, 216.315],
+    "outlinedInkBounds": [77.254, 39.633, 303.014, 178.583],
+    "suggestedEditableBounds": [74.772, 31.873, 314.808, 184.021],
+    "firstBaselineY": 55.043,
+    "baselineStep": 32.17,
+    "ruleBaselineYs": [55.043, 87.213, 119.383, 151.553, 183.723, 215.894],
+    "fontFamily": "Teko",
+    "fontWeight": 400,
+    "fontSizeSourceUnits": 23,
+    "clipViewBox": [0, 0, 132.143, 109.923],
+    "clipBackFile": "paperclip-back.svg",
+    "clipFrontFile": "paperclip-front.svg",
+    "clipCompleteFile": "paperclip.svg",
+    "layerOrder": ["paperclip-back.svg", "note-paper.svg", "editable note text", "paperclip-front.svg"],
+    "clipPlacement": "At note source origin (0,0), with width 132.143/419.118 of the note container. Front/back share the same tight clip viewBox; paperclip.svg is only for an unobscured icon."
+  }
+}

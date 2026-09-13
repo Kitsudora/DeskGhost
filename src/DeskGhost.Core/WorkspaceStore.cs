@@ -36,7 +36,7 @@ public sealed class WorkspaceStore
         }
         catch (Exception error) when (IsFileError(error))
         {
-            throw new WorkspaceStorageException($"无法读取工作区：{error.Message}", error);
+            throw new WorkspaceStorageException($"Cannot read the workspace: {error.Message}", error);
         }
         finally { gate.Release(); }
     }
@@ -51,7 +51,7 @@ public sealed class WorkspaceStore
         }
         catch (Exception error) when (IsFileError(error))
         {
-            throw new WorkspaceStorageException($"无法读取工作区备份：{error.Message}", error);
+            throw new WorkspaceStorageException($"Cannot read the workspace backup: {error.Message}", error);
         }
         finally { gate.Release(); }
     }
@@ -66,7 +66,7 @@ public sealed class WorkspaceStore
         try
         {
             WorkspaceValidator.Require(expectedId is null || expectedId == id,
-                "不能用另一个工作区覆盖当前文件，请另存为新文件。");
+                "A different workspace cannot overwrite this file. Save to a new file.");
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
             using var fileLock = AcquireWriteLock();
             await VerifyUnchangedAsync(cancellationToken).ConfigureAwait(false);
@@ -85,7 +85,7 @@ public sealed class WorkspaceStore
         }
         catch (Exception error) when (IsFileError(error))
         {
-            throw new WorkspaceStorageException($"保存工作区失败，已有文件及备份已保留：{error.Message}", error);
+            throw new WorkspaceStorageException($"Saving failed; the existing workspace file and backup were preserved: {error.Message}", error);
         }
         finally
         {
@@ -126,7 +126,7 @@ public sealed class WorkspaceStore
         }
         catch (Exception error) when (IsFileError(error))
         {
-            throw new WorkspaceStorageException($"恢复备份失败，已有数据已保留：{error.Message}", error);
+            throw new WorkspaceStorageException($"Backup recovery failed; existing data was preserved: {error.Message}", error);
         }
         finally
         {
@@ -140,19 +140,19 @@ public sealed class WorkspaceStore
         if (expectedHash is null)
         {
             if (File.Exists(Path) || File.Exists(BackupPath))
-                throw new WorkspaceConflictException("目标工作区或备份已存在，请先打开原文件，或另存为新文件。");
+                throw new WorkspaceConflictException("The target workspace or backup already exists. Open the original first or save to a new file.");
             return;
         }
         if (!File.Exists(Path))
-            throw new WorkspaceConflictException("工作区文件已被移动或删除；请另存为新文件以保留当前更改。");
+            throw new WorkspaceConflictException("The workspace file was moved or deleted. Save to a new file to keep these changes.");
         byte[] currentHash;
         try { currentHash = await ReadHashBoundedAsync(Path, cancellationToken).ConfigureAwait(false); }
         catch (WorkspaceValidationException)
         {
-            throw new WorkspaceConflictException("磁盘上的工作区已变更且超出允许大小，请另存为新文件。");
+            throw new WorkspaceConflictException("The workspace on disk changed and exceeds its size limit. Save to a new file.");
         }
         if (!CryptographicOperations.FixedTimeEquals(expectedHash, currentHash))
-            throw new WorkspaceConflictException("工作区已被其他窗口或程序修改；请重新打开，或另存为新文件以保留当前更改。");
+            throw new WorkspaceConflictException("Another window or application changed this workspace. Reopen it or save to a new file to keep these changes.");
     }
 
     private FileStream AcquireWriteLock()
@@ -164,7 +164,7 @@ public sealed class WorkspaceStore
         }
         catch (IOException error) when ((error.HResult & 0xffff) is 32 or 33)
         {
-            throw new WorkspaceConflictException("工作区正在由另一操作保存，请稍后重试。");
+            throw new WorkspaceConflictException("Another operation is saving this workspace. Try again shortly.");
         }
     }
 
@@ -192,12 +192,12 @@ public sealed class WorkspaceStore
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
             16 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
         WorkspaceValidator.Require(stream.Length is > 0 and <= WorkspaceLimits.MaxFileBytes,
-            $"工作区文件为空或超过 {WorkspaceLimits.MaxFileBytes / 1024 / 1024} MiB 限制，已停止读取。");
+            $"The workspace file is empty or exceeds {WorkspaceLimits.MaxFileBytes / 1024 / 1024} MiB. Reading was stopped.");
         var bytes = new byte[checked((int)stream.Length)];
         await stream.ReadExactlyAsync(bytes, cancellationToken).ConfigureAwait(false);
         var extra = new byte[1];
         WorkspaceValidator.Require(await stream.ReadAsync(extra, cancellationToken).ConfigureAwait(false) == 0,
-            "读取期间文件大小发生变化，请重新打开。");
+            "The file size changed while reading. Reopen the file.");
         return bytes;
     }
 
@@ -207,7 +207,7 @@ public sealed class WorkspaceStore
             16 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
         var length = stream.Length;
         WorkspaceValidator.Require(length is > 0 and <= WorkspaceLimits.MaxFileBytes,
-            "磁盘上的工作区文件为空或超过允许大小。");
+            "The workspace file on disk is empty or exceeds its size limit.");
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var buffer = new byte[16 * 1024];
         long read = 0;
@@ -215,10 +215,10 @@ public sealed class WorkspaceStore
         while ((count = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
         {
             read += count;
-            WorkspaceValidator.Require(read <= WorkspaceLimits.MaxFileBytes, "读取期间文件大小超出允许范围。");
+            WorkspaceValidator.Require(read <= WorkspaceLimits.MaxFileBytes, "The file exceeded its size limit while reading.");
             hash.AppendData(buffer, 0, count);
         }
-        WorkspaceValidator.Require(read == length, "读取期间文件大小发生变化，请重新打开。");
+        WorkspaceValidator.Require(read == length, "The file size changed while reading. Reopen the file.");
         return hash.GetHashAndReset();
     }
 

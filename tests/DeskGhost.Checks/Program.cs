@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DeskGhost.Core;
 
 if (args.Contains("--benchmark", StringComparer.Ordinal))
@@ -11,6 +12,8 @@ var checks = new (string Name, Func<Task> Run)[]
 {
     ("Branching, merging and forward-only links", Sync(GraphRules)),
     ("New task placement in the latest stage", Sync(CreationPlacement)),
+    ("Task notes, creation time and transactional metadata", Sync(Metadata)),
+    ("Cross-workspace transfer and paired history safety", Sync(Transfer)),
     ("Task lifecycle, deletion and history", Sync(Lifecycle)),
     ("Transactional edits and undo/redo", Sync(History)),
     ("Malformed workspaces and processing limits", Sync(Validation)),
@@ -73,6 +76,105 @@ static void Benchmark()
 }
 
 static WorkspaceSession NewSession() => new(Workspace.CreateNew("验证工作区"));
+
+static void Transfer()
+{
+    var source = NewSession();
+    var first = source.CreateTask("First", "Keep source", "");
+    var card = source.CreateTask("Moving card", "Keep description", "Research", [first.Id], notes: "Long notes\nKeep these too");
+    var last = source.CreateTask("Last", "Keep successor", "", [card.Id]);
+    source.AddLink(first.Id, last.Id);
+    source.SetState(card.Id, TaskState.Completed);
+    source.ArchiveTask(card.Id);
+    source.UnarchiveTask(card.Id);
+    source.ArchiveTask(card.Id);
+    var original = source.Workspace.Tasks.Single(task => task.Id == card.Id);
+    var target = NewSession();
+    target.InsertColumn(1); target.InsertColumn(2);
+    target.CreateTask("Occupied row", "", "", column: 2, row: 0);
+    var sourceBefore = JsonSerializer.Serialize(source.Workspace);
+    var targetBefore = JsonSerializer.Serialize(target.Workspace);
+    var beforeRevision = source.Revision;
+    var prepared = source.PrepareTransferTo(target, card.Id);
+    Check(JsonSerializer.Serialize(source.Workspace) == sourceBefore && JsonSerializer.Serialize(target.Workspace) == targetBefore && source.Revision == beforeRevision,
+        "Preparing a move must not change either session or its undo history.");
+    Check(ReferenceEquals(prepared.Steps[0].Session, target) && prepared.Steps[0].After.Tasks.Any(task => task.Id == card.Id),
+        "The receiving copy must be saved before the removing workspace.");
+    prepared.Commit();
+    var moved = target.Workspace.Tasks.Single(task => task.Id == card.Id);
+    Check(moved.Title == original.Title && moved.Description == original.Description && moved.Notes == original.Notes &&
+          moved.CreatedAt == original.CreatedAt && moved.State == original.State && moved.IsArchived == original.IsArchived &&
+          JsonSerializer.Serialize(moved.ArchiveHistory) == JsonSerializer.Serialize(original.ArchiveHistory),
+        "A move must preserve identity, content, timestamps, status and complete archive history.");
+    Check(moved.Column == 2 && moved.Row == 1 && target.Workspace.Categories.Contains("Research"),
+        "A moved card must use the target's rightmost slice, a free row and its category.");
+    Check(source.Workspace.Tasks.Count == 2 && source.Workspace.Tasks.All(task => task.Id != card.Id) &&
+          source.Workspace.Links.Count == 1 && source.Workspace.Links[0].SourceId == first.Id && source.Workspace.Links[0].TargetId == last.Id,
+        "Only the moved card and its incident links are removed; other tasks and links remain.");
+    var sourceAfter = JsonSerializer.Serialize(source.Workspace);
+    var targetAfter = JsonSerializer.Serialize(target.Workspace);
+    var undoPlan = target.PrepareUndo()!;
+    Check(ReferenceEquals(undoPlan.Steps[0].Session, source), "Undo must first durably restore the source card.");
+    undoPlan.Commit();
+    Check(JsonSerializer.Serialize(source.Workspace) == sourceBefore && JsonSerializer.Serialize(target.Workspace) == targetBefore,
+        "Undo from either workspace must restore both exact snapshots, including original links and placement.");
+    Check(source.Redo() && JsonSerializer.Serialize(source.Workspace) == sourceAfter && JsonSerializer.Serialize(target.Workspace) == targetAfter,
+        "Redo from the source must repeat the complete two-workspace move.");
+    target.UpdateTask(card.Id, "Later edit", moved.Description, moved.Category, "Later notes");
+    Check(!source.CanUndo, "One side cannot undo a shared move while its partner has newer edits.");
+    Reject<WorkspaceValidationException>(() => source.Undo());
+    Check(target.Undo() && source.CanUndo && source.Undo(), "Undoing the later edit must make the paired move undoable again.");
+    Check(target.Redo(), "The other workspace may redo the paired move.");
+    source.DiscardHistory();
+    Check(!target.CanUndo, "Closing one side must invalidate the shared undo boundary.");
+    Reject<WorkspaceValidationException>(() => target.Undo());
+    Check(target.Workspace.Tasks.Any(task => task.Id == card.Id), "A closed partner cannot cause a one-sided card deletion.");
+
+    var branchSource = NewSession();
+    var branchCard = branchSource.CreateTask("Branch", "", "");
+    var branchTarget = NewSession();
+    branchSource.PrepareTransferTo(branchTarget, branchCard.Id).Commit();
+    branchTarget.Undo();
+    branchSource.UpdateTask(branchCard.Id, "Keep the new branch", "", "");
+    Check(!branchTarget.CanRedo, "A new edit on either side invalidates the other side's paired redo.");
+    Reject<WorkspaceValidationException>(() => branchTarget.Redo());
+
+    var trimSource = NewSession();
+    var trimCard = trimSource.CreateTask("History boundary", "", "");
+    var trimTarget = NewSession();
+    trimSource.PrepareTransferTo(trimTarget, trimCard.Id).Commit();
+    for (var i = 0; i <= WorkspaceLimits.MaxHistoryEntries; i++) trimTarget.RenameWorkspace($"Later {i}");
+    Check(!trimSource.CanUndo, "Evicting one side of a paired history must invalidate its partner.");
+    Reject<WorkspaceValidationException>(() => trimSource.Undo());
+
+    var validationSource = NewSession();
+    var validationCard = validationSource.CreateTask("Unique ID", "", "New category");
+    var validationBefore = JsonSerializer.Serialize(validationSource.Workspace);
+    var duplicateWorkspace = Workspace.CreateNew("Duplicate");
+    duplicateWorkspace.Tasks.Add(new TaskCard { Id = validationCard.Id, Title = "Existing card" });
+    var duplicate = new WorkspaceSession(duplicateWorkspace);
+    Reject<WorkspaceValidationException>(() => validationSource.PrepareTransferTo(duplicate, validationCard.Id));
+    Reject<WorkspaceValidationException>(() => validationSource.PrepareTransferTo(validationSource, validationCard.Id));
+    var fullWorkspace = Workspace.CreateNew("Full categories");
+    fullWorkspace.Categories = Enumerable.Range(0, WorkspaceLimits.MaxCategories).Select(i => $"Category {i}").ToList();
+    Reject<WorkspaceValidationException>(() => validationSource.PrepareTransferTo(new WorkspaceSession(fullWorkspace), validationCard.Id));
+    fullWorkspace.Categories.Clear();
+    fullWorkspace.Tasks = Enumerable.Range(0, WorkspaceLimits.MaxTasks).Select(i => new TaskCard { Title = $"Card {i}", Row = i }).ToList();
+    Reject<WorkspaceValidationException>(() => validationSource.PrepareTransferTo(new WorkspaceSession(fullWorkspace), validationCard.Id));
+    Check(JsonSerializer.Serialize(validationSource.Workspace) == validationBefore,
+        "Duplicate IDs, same-workspace requests and target limits must leave the source and its history unchanged.");
+    var emptyLastWorkspace = Workspace.CreateNew("Empty last slice");
+    emptyLastWorkspace.Columns = Enumerable.Range(0, WorkspaceLimits.MaxColumns).Select(i => $"Slice {i}").ToList();
+    var emptyLast = new WorkspaceSession(emptyLastWorkspace);
+    var stale = validationSource.PrepareTransferTo(emptyLast, validationCard.Id);
+    Check(stale.Steps[0].After.Tasks.Single().Column == WorkspaceLimits.MaxColumns - 1 && stale.Steps[0].After.Tasks.Single().Row == 0,
+        "An empty last slice is used even at the slice limit; moving must not append another slice.");
+    validationSource.UpdateTask(validationCard.Id, "Changed during preparation", "", "New category");
+    Reject<WorkspaceValidationException>(() => stale.Commit());
+    Check(emptyLast.Workspace.Tasks.Count == 0, "Stale prepared changes must not partially mutate the receiving workspace.");
+    validationSource.DeleteTask(validationCard.Id);
+    Reject<WorkspaceValidationException>(() => validationSource.PrepareTransferTo(emptyLast, validationCard.Id));
+}
 
 static void Check(bool condition, string message)
 {
@@ -208,6 +310,8 @@ static void CreationPlacement()
     session.InsertColumn(3, "空的最新阶段");
     var beforeCreate = JsonSerializer.Serialize(session.Workspace);
     var independent = session.CreateTask("独立任务", "保留内容", "算法研究");
+    Check(independent.State == TaskState.NotStarted,
+        "An existing caller that omits the initial status must still create a Not started task.");
     Check(independent.Column == 3 && independent.Row == 0 && session.Workspace.Columns.Count == 4,
         "An independent task must use the last logical column even when it is empty, without appending another column.");
     var afterCreate = JsonSerializer.Serialize(session.Workspace);
@@ -234,6 +338,67 @@ static void CreationPlacement()
     Check(JsonSerializer.Serialize(session.Workspace) == beforeInvalid,
         "An explicit column left of a source must remain invalid and preserve the workspace.");
     WorkspaceValidator.Validate(session.Workspace);
+
+    foreach (var initialState in Enum.GetValues<TaskState>())
+    {
+        var creation = NewSession();
+        var before = JsonSerializer.Serialize(creation.Workspace);
+        var initialRevision = creation.Revision;
+        var card = creation.CreateTask("Prepared card", "Description", "New category", column: 2, row: 3,
+            notes: "Attached note", state: initialState);
+        var after = JsonSerializer.Serialize(creation.Workspace);
+        Check(card.State == initialState && card.Notes == "Attached note" && card.Column == 2 && card.Row == 3 &&
+              creation.Revision == initialRevision + 1,
+            "The chosen initial status, note and dropped position must be part of one creation edit.");
+        Check(creation.Undo() && JsonSerializer.Serialize(creation.Workspace) == before && !creation.CanUndo,
+            "One undo must remove the entire prepared card, its category and appended columns.");
+        var revision = creation.Revision;
+        foreach (var invalidState in new[] { (TaskState)(-1), (TaskState)int.MaxValue })
+            Reject<WorkspaceValidationException>(() => creation.CreateTask("Invalid state", "", "Rejected category",
+                column: 4, state: invalidState));
+        Check(creation.Revision == revision && JsonSerializer.Serialize(creation.Workspace) == before && creation.CanRedo,
+            "Invalid initial statuses must preserve the workspace, revision and pending redo.");
+        Check(creation.Redo() && JsonSerializer.Serialize(creation.Workspace) == after && !creation.CanRedo,
+            "One redo must restore the same card identity, timestamp, initial status, content and placement.");
+    }
+}
+
+static void Metadata()
+{
+    var session = NewSession();
+    var startedAt = DateTimeOffset.UtcNow;
+    var task = session.CreateTask("Metadata", "Short description", "", notes: "详细备注\nSecond paragraph\twith a tab");
+    var createdAt = task.CreatedAt;
+    Check(createdAt is { } timestamp && timestamp >= startedAt && timestamp <= DateTimeOffset.UtcNow && timestamp.Offset == TimeSpan.Zero,
+        "New tasks must record their actual UTC creation time.");
+    Check(task.Description == "Short description" && task.Notes == "详细备注\nSecond paragraph\twith a tab",
+        "Long notes must be separate from the description and preserve Unicode and line breaks.");
+    var original = JsonSerializer.Serialize(session.Workspace);
+    session.UpdateTask(task.Id, "Edited title", "Edited description", "", notes: "Revised notes");
+    var edited = JsonSerializer.Serialize(session.Workspace);
+    Check(session.Workspace.Tasks.Single().CreatedAt == createdAt,
+        "Editing task fields must preserve the original creation time.");
+    Check(session.Undo() && JsonSerializer.Serialize(session.Workspace) == original &&
+          session.Redo() && JsonSerializer.Serialize(session.Workspace) == edited,
+        "Notes and creation time must survive complete undo/redo snapshots.");
+    session.UpdateTask(task.Id, "Older client edit", "Description only", "");
+    Check(session.Workspace.Tasks.Single().Notes == "Revised notes" && session.Workspace.Tasks.Single().CreatedAt == createdAt,
+        "An update that omits notes must preserve notes and creation time.");
+    session.UpdateTask(task.Id, "Clear notes", "", "", notes: "");
+    Check(session.Workspace.Tasks.Single().Notes.Length == 0, "An explicit empty notes field must clear notes.");
+    session.UpdateTask(task.Id, "Maximum notes", "", "", notes: new string('n', WorkspaceLimits.MaxNotesLength));
+    var beforeInvalid = JsonSerializer.Serialize(session.Workspace);
+    var revision = session.Revision;
+    foreach (var notes in new[] { new string('n', WorkspaceLimits.MaxNotesLength + 1), "invalid\0notes" })
+        Reject<WorkspaceValidationException>(() => session.UpdateTask(task.Id, "Invalid notes", "", "", notes));
+    Check(session.Revision == revision && JsonSerializer.Serialize(session.Workspace) == beforeInvalid,
+        "Oversized or invalid notes must preserve the live task and undo history.");
+    var invalid = session.Workspace.DeepClone();
+    invalid.Tasks[0].Notes = null!;
+    Reject<WorkspaceValidationException>(() => WorkspaceValidator.Validate(invalid));
+    invalid = session.Workspace.DeepClone();
+    invalid.Tasks[0].CreatedAt = DateTimeOffset.MinValue;
+    Reject<WorkspaceValidationException>(() => WorkspaceValidator.Validate(invalid));
 }
 
 static void Lifecycle()
@@ -338,15 +503,16 @@ static async Task Storage()
     {
         var path = Path.Combine(directory, "workspace.deskghost.json");
         var session = NewSession();
-        var card = session.CreateTask("首次保存", "中文往返", "PCB 设计");
+        var card = session.CreateTask("首次保存", "中文往返", "PCB 设计", notes: "详细备注\n第二段");
         var store = new WorkspaceStore(path);
         await store.SaveAsync(session.Workspace);
         var loaded = await new WorkspaceStore(path).LoadAsync();
-        Check(loaded.Tasks.Single().Description == "中文往返", "Saved Unicode task data must round-trip.");
+        Check(loaded.Tasks.Single().Description == "中文往返" && loaded.Tasks.Single().Notes == "详细备注\n第二段" &&
+              loaded.Tasks.Single().CreatedAt == card.CreatedAt, "Saved Unicode task data and creation metadata must round-trip.");
 
         var competing = new WorkspaceStore(path);
         await competing.LoadAsync();
-        session.UpdateTask(card.Id, "第二次保存", "更新内容", "PCB 设计");
+        session.UpdateTask(card.Id, "第二次保存", "更新内容", "PCB 设计", notes: "Revised notes");
         await store.SaveAsync(session.Workspace);
         await RejectAsync<WorkspaceConflictException>(() => competing.SaveAsync(loaded));
         var current = await new WorkspaceStore(path).LoadAsync();
@@ -354,13 +520,14 @@ static async Task Storage()
         await RejectAsync<WorkspaceConflictException>(() => new WorkspaceStore(path).SaveAsync(loaded));
 
         var backup = await store.LoadBackupAsync();
-        Check(backup.Tasks.Single().Title == "首次保存", "Replacement saves must retain the previous valid version.");
+        Check(backup.Tasks.Single().Title == "首次保存" && backup.Tasks.Single().Notes == "详细备注\n第二段" &&
+              backup.Tasks.Single().CreatedAt == card.CreatedAt, "Replacement saves must retain the previous valid version and metadata.");
         var validBytes = await File.ReadAllBytesAsync(path);
         var validJson = System.Text.Encoding.UTF8.GetString(validBytes);
         var invalidPath = Path.Combine(directory, "invalid.deskghost.json");
         foreach (var json in new[]
         {
-            "null", "{}", validJson.Replace("\"formatVersion\": 1", "\"formatVersion\": 999", StringComparison.Ordinal),
+            "null", "{}", validJson.Replace($"\"formatVersion\": {WorkspaceLimits.CurrentFormatVersion}", "\"formatVersion\": 999", StringComparison.Ordinal),
             validJson.Insert(1, "\"formatVersion\":1,"), validJson.Insert(1, "\"unexpected\":true,"),
             "{\"tasks\":[" + string.Join(',', Enumerable.Repeat("{}", WorkspaceLimits.MaxTasks + 1)) + "]}",
             "{" + string.Join(',', Enumerable.Range(0, 17).Select(i => $"\"field{i}\":0")) + "}",
@@ -376,6 +543,60 @@ static async Task Storage()
         await RejectAsync<WorkspaceValidationException>(() => store.SaveAsync(invalid));
         var afterRejectedSave = await File.ReadAllBytesAsync(path);
         Check(validBytes.SequenceEqual(afterRejectedSave), "Rejected saves must preserve existing bytes.");
+
+        // Build a genuine v1 shape from valid persisted data, without inventing
+        // timestamps for tasks created before this metadata was recorded.
+        var legacyNode = JsonNode.Parse(validJson)!.AsObject();
+        legacyNode["formatVersion"] = 1;
+        legacyNode["name"] = "原有工作区名称";
+        legacyNode["columns"]![0] = "原有阶段名称";
+        foreach (var legacyTask in legacyNode["tasks"]!.AsArray())
+        {
+            legacyTask!.AsObject().Remove("notes");
+            legacyTask.AsObject().Remove("createdAt");
+        }
+        var legacyPath = Path.Combine(directory, "legacy.deskghost.json");
+        var legacyJson = legacyNode.ToJsonString();
+        await File.WriteAllTextAsync(legacyPath, legacyJson);
+        var legacyStore = new WorkspaceStore(legacyPath);
+        var migrated = await legacyStore.LoadAsync();
+        Check(migrated.FormatVersion == WorkspaceLimits.CurrentFormatVersion && migrated.Tasks.Single().CreatedAt is null &&
+              migrated.Tasks.Single().Notes == "" && migrated.Name == "原有工作区名称" && migrated.Columns[0] == "原有阶段名称",
+            "Version 1 must migrate in memory with unknown creation time and unchanged user names/content.");
+        Check(await File.ReadAllTextAsync(legacyPath) == legacyJson, "Opening a legacy workspace must not rewrite its file.");
+        var legacySession = new WorkspaceSession(migrated);
+        legacySession.UpdateTask(card.Id, "Edited legacy task", "Keep unknown creation time", "PCB 设计", "New legacy notes");
+        Check(legacySession.Workspace.Tasks.Single().CreatedAt is null,
+            "Editing a legacy task must not manufacture a creation timestamp.");
+        await legacyStore.SaveAsync(legacySession.Workspace);
+        Check(await File.ReadAllTextAsync(legacyStore.BackupPath) == legacyJson,
+            "The first v2 save must preserve the exact prior v1 bytes as its backup.");
+        var upgraded = await new WorkspaceStore(legacyPath).LoadAsync();
+        Check(upgraded.FormatVersion == 2 && upgraded.Tasks.Single().Notes == "New legacy notes" &&
+              upgraded.Tasks.Single().CreatedAt is null, "The upgraded file must persist metadata using version 2.");
+        var recoveredLegacy = await legacyStore.RecoverBackupAsync();
+        Check(recoveredLegacy.Tasks.Single().CreatedAt is null && recoveredLegacy.Tasks.Single().Notes == "" &&
+              await File.ReadAllTextAsync(legacyPath) == legacyJson,
+            "Recovering a v1 backup must restore its bytes and preserve unknown legacy metadata.");
+
+        foreach (var invalidMetadata in new Action<JsonObject>[]
+        {
+            node => node["tasks"]![0]!.AsObject().Remove("notes"),
+            node => node["tasks"]![0]!.AsObject().Remove("createdAt"),
+            node => node["tasks"]![0]!["notes"] = null,
+            node => node["tasks"]![0]!["notes"] = new string('x', WorkspaceLimits.MaxNotesLength + 1),
+            node => node["tasks"]![0]!["createdAt"] = "not-a-date",
+            node => node["formatVersion"] = 1
+        })
+        {
+            var node = JsonNode.Parse(validJson)!.AsObject();
+            invalidMetadata(node);
+            var json = node.ToJsonString();
+            await File.WriteAllTextAsync(invalidPath, json);
+            await RejectAsync<WorkspaceValidationException>(async () => { await new WorkspaceStore(invalidPath).LoadAsync(); });
+            Check(await File.ReadAllTextAsync(invalidPath) == json,
+                "Missing v2 metadata, invalid values and metadata disguised as v1 must be rejected without changing the file.");
+        }
 
         await using (var locked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
         {

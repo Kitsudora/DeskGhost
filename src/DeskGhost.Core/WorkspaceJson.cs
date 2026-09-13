@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace DeskGhost.Core;
 
@@ -14,6 +15,23 @@ internal static class WorkspaceJson
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         Converters = { new JsonStringEnumConverter(allowIntegerValues: false) }
     };
+    private static readonly JsonSerializerOptions LegacyOptions = new(Options)
+    {
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver
+        {
+            Modifiers =
+            {
+                info =>
+                {
+                    if (info.Type != typeof(TaskCard)) return;
+                    // Version 1 never recorded these fields. Keep its original
+                    // strict schema and leave their defaults empty/unknown.
+                    foreach (var property in info.Properties.Where(p => p.Name is "notes" or "createdAt").ToArray())
+                        info.Properties.Remove(property);
+                }
+            }
+        }
+    };
 
     internal static byte[] Serialize(Workspace workspace)
     {
@@ -27,28 +45,33 @@ internal static class WorkspaceJson
         }
         catch (JsonException error)
         {
-            throw new WorkspaceValidationException("工作区无法序列化，请检查数据。", error);
+            throw new WorkspaceValidationException("The workspace could not be serialized. Check its data.", error);
         }
     }
 
     internal static Workspace Deserialize(byte[] bytes)
     {
         WorkspaceValidator.Require(bytes.Length is > 0 and <= WorkspaceLimits.MaxFileBytes,
-            $"工作区文件为空或超过 {WorkspaceLimits.MaxFileBytes / 1024 / 1024} MiB 限制。");
+            $"The workspace file is empty or exceeds {WorkspaceLimits.MaxFileBytes / 1024 / 1024} MiB.");
         try
         {
-            RejectDuplicateProperties(bytes);
-            var workspace = JsonSerializer.Deserialize<Workspace>(bytes, Options);
+            var version = ValidateStructure(bytes);
+            WorkspaceValidator.Require(version is 1 or WorkspaceLimits.CurrentFormatVersion,
+                $"Unsupported workspace format version {version}; open it with a compatible application.");
+            var workspace = JsonSerializer.Deserialize<Workspace>(bytes, version == 1 ? LegacyOptions : Options);
+            // Reading never writes the source file. Its original bytes become
+            // the normal .bak when the first subsequent edit is saved as v2.
+            if (version == 1 && workspace is not null) workspace.FormatVersion = WorkspaceLimits.CurrentFormatVersion;
             WorkspaceValidator.Validate(workspace!);
             return workspace!;
         }
         catch (JsonException error)
         {
-            throw new WorkspaceValidationException("工作区文件格式损坏或含有无效字段，原文件未被修改。", error);
+            throw new WorkspaceValidationException("The workspace file is malformed or contains invalid fields. The original file is unchanged.", error);
         }
     }
 
-    private static void RejectDuplicateProperties(byte[] bytes)
+    private static int? ValidateStructure(byte[] bytes)
     {
         var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { MaxDepth = 16 });
         var objects = new Stack<HashSet<string>>();
@@ -56,13 +79,16 @@ internal static class WorkspaceJson
         var taskProperty = "";
         var rootArrayCount = 0;
         var archiveCount = 0;
+        int? version = null;
         while (reader.Read())
         {
+            if (reader.TokenType == JsonTokenType.Number && reader.CurrentDepth == 1 && rootProperty == "formatVersion" && reader.TryGetInt32(out var value))
+                version = value;
             string? propertyName = null;
             if (reader.TokenType == JsonTokenType.PropertyName)
             {
                 WorkspaceValidator.Require(reader.ValueSpan.Length <= 128,
-                    "文件字段名称超出允许长度，已停止读取。");
+                    "A file field name exceeds the allowed length. Reading was stopped.");
                 propertyName = reader.GetString()!;
                 if (reader.CurrentDepth == 1) rootProperty = propertyName;
                 if (reader.CurrentDepth == 3) taskProperty = propertyName;
@@ -81,12 +107,12 @@ internal static class WorkspaceJson
                     "categories" => WorkspaceLimits.MaxCategories,
                     _ => WorkspaceLimits.MaxLinks
                 };
-                WorkspaceValidator.Require(++rootArrayCount <= limit, "文件中的集合数量超出限制，已停止读取。");
+                WorkspaceValidator.Require(++rootArrayCount <= limit, "A collection in the file exceeds its item limit. Reading was stopped.");
             }
             if (reader.CurrentDepth == 4 && rootProperty == "tasks" && taskProperty == "archiveHistory"
                 && StartsValue(reader.TokenType))
                 WorkspaceValidator.Require(++archiveCount <= WorkspaceLimits.MaxArchiveEventsPerTask,
-                    "任务归档历史数量超出限制，已停止读取。");
+                    "Task archive history exceeds its limit. Reading was stopped.");
             if (reader.TokenType == JsonTokenType.StartObject)
                 objects.Push(new HashSet<string>(StringComparer.Ordinal));
             else if (reader.TokenType == JsonTokenType.EndObject)
@@ -96,9 +122,10 @@ internal static class WorkspaceJson
                 var properties = objects.Peek();
                 if (!properties.Add(propertyName!)) throw new JsonException("Duplicate property.");
                 WorkspaceValidator.Require(properties.Count <= 16,
-                    "文件对象字段数量超出允许范围，已停止读取。");
+                    "An object in the file has too many fields. Reading was stopped.");
             }
         }
+        return version;
     }
 
     private static bool StartsValue(JsonTokenType type) => type is JsonTokenType.StartObject
@@ -122,7 +149,7 @@ internal static class WorkspaceJson
         private void CheckSize(int count)
         {
             if (Length + count > WorkspaceLimits.MaxFileBytes)
-                throw new WorkspaceValidationException($"工作区文件不能超过 {WorkspaceLimits.MaxFileBytes / 1024 / 1024} MiB；本次更改未保存。");
+                throw new WorkspaceValidationException($"Workspace files cannot exceed {WorkspaceLimits.MaxFileBytes / 1024 / 1024} MiB. This change was not saved.");
         }
     }
 }
