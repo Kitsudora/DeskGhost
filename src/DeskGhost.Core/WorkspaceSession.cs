@@ -39,7 +39,10 @@ public sealed class WorkspaceSession
         {
             WorkspaceValidator.Require(Enum.IsDefined(state), "Task status is invalid.");
             WorkspaceValidator.Require(document.Tasks.Count < WorkspaceLimits.MaxTasks, "The task limit has been reached.");
-            var minimumColumn = sources.Count == 0 ? 0 : sources.Max(sourceId => ActiveTask(document, sourceId).Column) + 1;
+            var sourceCards = sources.Select(sourceId => ActiveTask(document, sourceId)).ToArray();
+            WorkspaceValidator.Require(sourceCards.All(source => !source.IsArchived),
+                "Restore the archived chain before creating a connected task.");
+            var minimumColumn = sourceCards.Length == 0 ? 0 : sourceCards.Max(source => source.Column) + 1;
             var targetColumn = column ?? (sources.Count == 0 ? document.Columns.Count - 1 : minimumColumn);
             WorkspaceValidator.Require(targetColumn >= minimumColumn && targetColumn < WorkspaceLimits.MaxColumns,
                 "New tasks must be right of every source and within the slice limit.");
@@ -118,8 +121,9 @@ public sealed class WorkspaceSession
         var source = ActiveTask(document, sourceId);
         var target = ActiveTask(document, targetId);
         WorkspaceValidator.Require(source.Column < target.Column, "Successor tasks must be right of their source.");
-        if (!document.Links.Any(link => link.SourceId == sourceId && link.TargetId == targetId))
-            document.Links.Add(new TaskLink { SourceId = sourceId, TargetId = targetId });
+        if (document.Links.Any(link => link.SourceId == sourceId && link.TargetId == targetId)) return;
+        RequireMatchingArchive(source, target);
+        document.Links.Add(new TaskLink { SourceId = sourceId, TargetId = targetId });
     });
 
     /// <summary>Connects an existing task, shifting it and affected successors right in one transaction.</summary>
@@ -129,6 +133,7 @@ public sealed class WorkspaceSession
         var target = ActiveTask(document, targetId);
         WorkspaceValidator.Require(sourceId != targetId, "A task cannot link to itself.");
         if (document.Links.Any(link => link.SourceId == sourceId && link.TargetId == targetId)) return;
+        RequireMatchingArchive(source, target);
         var outgoing = document.Links.ToLookup(link => link.SourceId, link => link.TargetId);
         var visited = new HashSet<Guid>();
         var pending = new Stack<Guid>();
@@ -177,6 +182,7 @@ public sealed class WorkspaceSession
         if (sourceId == newSourceId && targetId == newTargetId) return;
         WorkspaceValidator.Require(!document.Links.Any(link => link.SourceId == newSourceId && link.TargetId == newTargetId),
             "These tasks are already linked.");
+        RequireMatchingArchive(source, target);
         document.Links.RemoveAll(link => link.SourceId == sourceId && link.TargetId == targetId);
         document.Links.Add(new TaskLink { SourceId = newSourceId, TargetId = newTargetId });
     });
@@ -192,21 +198,30 @@ public sealed class WorkspaceSession
     /// <summary>Restores the card from trash without restoring or inventing edges.</summary>
     public void RestoreTask(Guid taskId) => Edit(document => FindTask(document, taskId).DeletedAt = null);
 
+    /// <summary>Archives the complete connected chain, including branches and merges, in one edit.</summary>
     public void ArchiveTask(Guid taskId) => Edit(document =>
     {
-        var card = ActiveTask(document, taskId);
-        WorkspaceValidator.Require(card.State is TaskState.Completed or TaskState.Stopped, "Only completed or stopped tasks can be archived.");
-        if (card.IsArchived) return;
-        card.IsArchived = true;
-        card.ArchiveHistory.Add(new ArchiveEvent { At = DateTimeOffset.UtcNow, Action = ArchiveAction.Archived });
+        var chain = ConnectedTasks(document, taskId);
+        WorkspaceValidator.Require(chain.All(card => card.State is TaskState.Completed or TaskState.Stopped),
+            "Every task in this connected chain must be Completed or Stopped before archiving. Finish or stop the remaining tasks, or disconnect the links first.");
+        var at = DateTimeOffset.UtcNow;
+        foreach (var card in chain.Where(card => !card.IsArchived))
+        {
+            card.IsArchived = true;
+            card.ArchiveHistory.Add(new ArchiveEvent { At = at, Action = ArchiveAction.Archived });
+        }
     });
 
+    /// <summary>Restores the connected chain without changing its states or existing relationships.</summary>
     public void UnarchiveTask(Guid taskId) => Edit(document =>
     {
-        var card = ActiveTask(document, taskId);
-        if (!card.IsArchived) return;
-        card.IsArchived = false;
-        card.ArchiveHistory.Add(new ArchiveEvent { At = DateTimeOffset.UtcNow, Action = ArchiveAction.Unarchived });
+        var chain = ConnectedTasks(document, taskId);
+        var at = DateTimeOffset.UtcNow;
+        foreach (var card in chain.Where(card => card.IsArchived))
+        {
+            card.IsArchived = false;
+            card.ArchiveHistory.Add(new ArchiveEvent { At = at, Action = ArchiveAction.Unarchived });
+        }
     });
 
     /// <summary>Prepares a single-card move; callers can persist both candidates before committing.</summary>
@@ -357,6 +372,32 @@ public sealed class WorkspaceSession
         var card = FindTask(document, id);
         WorkspaceValidator.Require(card.DeletedAt is null, "Restore the task from trash first.");
         return card;
+    }
+
+    private static void RequireMatchingArchive(TaskCard source, TaskCard target) =>
+        WorkspaceValidator.Require(source.IsArchived == target.IsArchived,
+            "Restore the archived chain before connecting it to active tasks.");
+
+    private static List<TaskCard> ConnectedTasks(Workspace document, Guid taskId)
+    {
+        ActiveTask(document, taskId);
+        var active = document.Tasks.Where(card => card.DeletedAt is null).ToDictionary(card => card.Id);
+        var outgoing = document.Links.ToLookup(link => link.SourceId, link => link.TargetId);
+        var incoming = document.Links.ToLookup(link => link.TargetId, link => link.SourceId);
+        var chain = new List<TaskCard>();
+        var visited = new HashSet<Guid> { taskId };
+        var pending = new Stack<Guid>();
+        pending.Push(taskId);
+        // Only current links establish membership. Iterative traversal visits
+        // each active card once, with work bounded by the document's task/link
+        // limits; deleted cards and disconnected former successors stay out.
+        while (pending.TryPop(out var current))
+        {
+            chain.Add(active[current]);
+            foreach (var next in outgoing[current].Concat(incoming[current]))
+                if (active.ContainsKey(next) && visited.Add(next)) pending.Push(next);
+        }
+        return chain;
     }
 
     private static string NormalizeCategory(Workspace document, string? category)

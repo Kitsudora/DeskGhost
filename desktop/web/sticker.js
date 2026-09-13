@@ -7,6 +7,7 @@ let active = null;
 let renderer = null;
 let graphicsUnavailable = false;
 if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => { if (document.hidden) active?.cancelGesture(); });
+if (typeof window !== 'undefined') window.addEventListener('blur', () => active?.cancelGesture());
 
 /** Direction describes the hand movement, rather than cycling through all states. */
 export function nextStickerState(state, direction) {
@@ -224,8 +225,9 @@ export class StickerController {
   }
 
   pointerDown(event) {
-    if (event.button !== 0 || this.disabled || this.busy || active && active !== this) return;
+    if (event.button !== 0 || this.disabled || this.busy || this.saving || this.gesture || active && active !== this) return;
     event.stopPropagation();
+    active = this;
     const rect = this.slot.getBoundingClientRect();
     this.peelAngle = null;
     this.gesture = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, width: rect.width, height: rect.height, progress: 0, direction: null };
@@ -235,6 +237,7 @@ export class StickerController {
   pointerMove(event) {
     const gesture = this.gesture;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (event.type === 'pointermove' && !(event.buttons & 1)) { this.cancelGesture(); return; }
     event.stopPropagation();
     const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y;
     const direction = stickerGestureDirection(dx, dy, gesture.direction);

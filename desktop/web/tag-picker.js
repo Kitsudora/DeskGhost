@@ -2,7 +2,7 @@ import { createPaperTag } from './paper.js';
 
 const PAGE_SIZE = 6;
 
-/** A bounded stack of loose paper tags. Native inputs handle text and IME composition. */
+/** A bounded paper tray. Native inputs handle text and IME composition. */
 export class TagPicker {
   constructor(element, options) {
     this.element = element;
@@ -13,13 +13,13 @@ export class TagPicker {
     this.page = 0;
     this.busy = false;
     this.generation = 0;
-    this.element.querySelector('#close-tag-picker').addEventListener('click', () => this.close());
     this.element.querySelector('#tag-previous').addEventListener('click', () => { this.page--; this.render(); });
     this.element.querySelector('#tag-next').addEventListener('click', () => { this.page++; this.render(); });
     this.element.querySelector('#create-paper-tag').addEventListener('click', () => this.create());
     this.query.addEventListener('input', () => { this.page = 0; this.render(); });
     this.element.addEventListener('keydown', event => {
-      if (event.isComposing) return;
+      if (event.isComposing || event.keyCode === 229) return;
+      if (event.key === 'Enter' && event.repeat) { event.preventDefault(); event.stopPropagation(); return; }
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); this.close(); return; }
       if (event.key === 'Enter') {
         if (event.target === this.query) {
@@ -47,7 +47,11 @@ export class TagPicker {
 
   open(kind, anchor, { focus = false } = {}) {
     if (this.busy) return;
+    if (this.anchor !== anchor) this.releaseAnchor();
     this.anchor = anchor;
+    this.anchor.classList.add('is-raised');
+    this.anchor.setAttribute('aria-expanded', 'true');
+    this.anchor.setAttribute('aria-controls', this.element.id);
     if (this.kind !== kind || this.element.hidden) {
       this.generation++;
       this.kind = kind; this.page = 0; this.query.value = ''; this.error.textContent = '';
@@ -63,12 +67,14 @@ export class TagPicker {
 
   position() {
     if (this.element.hidden || !this.anchor) return;
-    const parent = this.element.offsetParent.getBoundingClientRect(), anchor = this.anchor.getBoundingClientRect();
+    const parent = this.element.offsetParent?.getBoundingClientRect();
+    if (!parent) return;
+    const anchor = this.anchor.getBoundingClientRect();
     const width = this.element.offsetWidth, height = this.element.offsetHeight;
-    const right = anchor.right - parent.left + 12;
-    const left = right + width <= parent.width - 8 ? right : anchor.left - parent.left - width - 12;
-    this.element.style.left = `${Math.max(8, Math.min(parent.width - width - 8, left))}px`;
-    this.element.style.top = `${Math.max(8, Math.min(parent.height - height - 8, anchor.top - parent.top))}px`;
+    const right = anchor.right + 12;
+    const left = right + width <= innerWidth - 16 ? right : anchor.left - width - 12;
+    this.element.style.left = `${Math.max(16, Math.min(innerWidth - width - 16, left)) - parent.left}px`;
+    this.element.style.top = `${Math.max(16, Math.min(innerHeight - height - 16, anchor.top)) - parent.top}px`;
   }
 
   render() {
@@ -101,7 +107,11 @@ export class TagPicker {
     for (const control of this.element.querySelectorAll('input,button')) control.disabled = true;
     try {
       const accepted = await action();
-      if (generation === this.generation && accepted !== false) { this.close(false); if (advance) this.options.onAdvance?.(); }
+      if (generation === this.generation && accepted !== false) {
+        this.close(false);
+        if (advance) this.options.onAdvance?.();
+        else this.focusAnchor();
+      }
     } catch (error) { this.error.textContent = error.message || String(error); }
     finally {
       this.busy = false;
@@ -126,7 +136,17 @@ export class TagPicker {
     this.generation++;
     const hadFocus = this.element.contains(document.activeElement);
     this.element.hidden = true;
-    if (restoreFocus && hadFocus && this.anchor?.isConnected && !this.anchor.closest('[inert]')) this.anchor.focus({ preventScroll: true });
+    this.releaseAnchor();
+    if (restoreFocus && hadFocus) this.focusAnchor();
     this.options.onLayout?.();
+  }
+
+  releaseAnchor() {
+    this.anchor?.classList.remove('is-raised');
+    this.anchor?.setAttribute('aria-expanded', 'false');
+  }
+
+  focusAnchor() {
+    if (this.anchor?.isConnected && !this.anchor.disabled && !this.anchor.closest('[inert],[hidden]')) this.anchor.focus({ preventScroll: true });
   }
 }

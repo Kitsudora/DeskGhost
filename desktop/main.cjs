@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL, fileURLToPath } = require('node:url');
-const { CircleGestureRecognizer, SpeedDismissRecognizer } = require('./gesture.cjs');
+const { CircleGestureRecognizer, SpeedDismissRecognizer, DEFAULT_GESTURE_DIFFICULTY } = require('./gesture.cjs');
 
 const projectRoot = path.resolve(__dirname, '..');
 const dataIndex = process.argv.indexOf('--data-dir');
@@ -18,13 +18,18 @@ const settingsPath = path.join(baseFolder, 'web-settings.json');
 const webRoot = path.join(__dirname, 'web');
 const rendererPath = path.join(webRoot, 'index.html');
 const rendererUrl = pathToFileURL(rendererPath).href;
-const defaults = { formatVersion: 1, dataFolder: path.join(baseFolder, 'Workspaces'), createHotkey: 'Ctrl+Alt+N', graphHotkey: 'Ctrl+Alt+G', gestureEnabled: true, effects: 'high', idleRoamSeconds: 180, dismissSpeed: 1.5, openFiles: [] };
+// Electron's default "floating" level reorders behind the taskbar on Windows,
+// which can demote this window when the taskbar is not topmost. Our bounds already
+// exclude the taskbar; use the ordinary topmost layer without that extra reorder.
+const overlayLevel = 'pop-up-menu';
+const defaults = { formatVersion: 1, dataFolder: path.join(baseFolder, 'Workspaces'), createHotkey: 'Ctrl+Alt+N', graphHotkey: 'Ctrl+Alt+G', gestureEnabled: true, gestureDifficulty: DEFAULT_GESTURE_DIFFICULTY, effects: 'high', idleRoamSeconds: 180, dismissSpeed: 1.5, openFiles: [] };
 let settings = { ...defaults }, settingsInvalid = false, settingsWarning = null;
 let win, tray, bridge, startup, lastState = { documents: [], activeWorkspaceId: null, result: null };
 let quitting = false, exitRequested = false, mode = 'graph', interactive = false, regions = [], dragUntil = 0;
 let sampleTimer, rendererReady = false, suspended = false, lastCursor = null, warningList = [];
 let cursorFailures = 0;
 let activationId = 0, activationPending = false, activationTimer;
+let nativeDialogOpen = false;
 let readyEscapeRegistered = false;
 let roaming = false, nextRoamCheck = 0;
 let pendingOperations = 0, operationQueue = Promise.resolve();
@@ -99,9 +104,11 @@ function acceptState(state, emit = true) {
 function checkSettings(value) {
   if (value && !Object.hasOwn(value, 'idleRoamSeconds')) value = { ...value, idleRoamSeconds: defaults.idleRoamSeconds };
   if (value && !Object.hasOwn(value, 'dismissSpeed')) value = { ...value, dismissSpeed: defaults.dismissSpeed };
+  if (value && !Object.hasOwn(value, 'gestureDifficulty')) value = { ...value, gestureDifficulty: defaults.gestureDifficulty };
   if (!value || value.formatVersion !== 1 || typeof value.dataFolder !== 'string' || !value.dataFolder.trim() || value.dataFolder.length > 1024 || !path.isAbsolute(value.dataFolder) ||
     !['high', 'low', 'off'].includes(value.effects) || typeof value.gestureEnabled !== 'boolean' || ![0, 180, 300, 600].includes(value.idleRoamSeconds) ||
     !Number.isFinite(value.dismissSpeed) || value.dismissSpeed < 0.5 || value.dismissSpeed > 4 ||
+    !Number.isInteger(value.gestureDifficulty) || value.gestureDifficulty < 0 || value.gestureDifficulty > 100 ||
     !Array.isArray(value.openFiles) || value.openFiles.length > 12 || value.openFiles.some(p => typeof p !== 'string' || !path.isAbsolute(p) || p.length > 1024)) throw new Error('The settings file contains invalid data.');
   for (const key of ['createHotkey', 'graphHotkey']) if (typeof value[key] !== 'string' || !value[key].trim() || value[key].length > 80) throw new Error('The global shortcut is invalid.');
   return value;
@@ -214,12 +221,13 @@ function setRegions(payload) {
     if (!rect || !['x', 'y', 'width', 'height'].every(k => Number.isFinite(rect[k]) && Math.abs(rect[k]) <= 50000) || rect.width < 0 || rect.height < 0) throw new Error('The interaction region is invalid.');
     return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
   });
-  dragUntil = payload.dragging === true ? Date.now() + 30000 : 0;
+  dragUntil = payload.dragging === true && win.isFocused() && !nativeDialogOpen && !suspended ? Date.now() + 30000 : 0;
   refreshHitTest(screen.getCursorScreenPoint());
   return true;
 }
 function refreshHitTest(point) {
   if (!win || win.isDestroyed()) return;
+  if (nativeDialogOpen || suspended) { setInteractive(false); return; }
   const bounds = win.getBounds(), x = point.x - bounds.x, y = point.y - bounds.y;
   setInteractive(Date.now() < dragUntil || regions.some(r => x >= r.x && y >= r.y && x <= r.x + r.width && y <= r.y + r.height));
 }
@@ -240,6 +248,7 @@ function activateWindow() {
     if (!win.isFocusable()) win.hide();
     win.setFocusable(true);
     win.setSkipTaskbar(true);
+    win.setAlwaysOnTop(true, overlayLevel);
     setInteractive(true);
     win.show();
     win.focus();
@@ -259,10 +268,12 @@ function activateWindow() {
   return requestedId;
 }
 function summon(nextMode = 'graph', internal = false) {
-  if (!win || win.isDestroyed() || !rendererReady) return;
+  if (!win || win.isDestroyed() || !rendererReady || nativeDialogOpen || suspended) return;
   if (!['ready', 'create', 'graph'].includes(nextMode)) throw new Error('The summon mode is invalid.');
   if (nextMode === 'ready' && mode !== 'idle' && mode !== 'ready') return;
-  if (internal && win.isFocusable()) {
+  if (internal) {
+    // A delayed save/return completion must not reactivate a dismissed window.
+    if (mode === 'idle' || !win.isFocusable()) return;
     // A real click already activated the renderer. Keep its native/DOM focus
     // and screen position while it reveals the task card.
     mode = nextMode; roaming = false; circles.reset(); speedDismiss.reset(Date.now());
@@ -286,20 +297,22 @@ function summon(nextMode = 'graph', internal = false) {
     regions = []; dragUntil = 0; setInteractive(false);
     // A mouse-only summon stays decorative until the user clicks its landing
     // button. showInactive leaves the foreground application's keyboard alone.
-    win.setFocusable(true); win.setSkipTaskbar(true); win.showInactive();
+    win.setFocusable(true); win.setSkipTaskbar(true); win.setAlwaysOnTop(true, overlayLevel); win.showInactive();
   } else requestedId = activateWindow();
   setReadyEscape(mode === 'ready');
   if (!internal) send({ type: 'summon', activationId: requestedId, mode, escapeAvailable: readyEscapeRegistered, point: { x: point.x - area.x, y: point.y - area.y } });
   refreshHitTest(point);
 }
 function hideOverlay(disperse = false) {
+  if (nativeDialogOpen) return;
   cancelActivation();
   mode = 'idle'; roaming = false; dragUntil = 0; circles.reset(); speedDismiss.reset(); regions = [];
   setReadyEscape(false);
   setInteractive(false); send({ type: 'hide', disperse });
-  if (win && !win.isDestroyed()) { win.setFocusable(false); win.blur(); }
+  if (win && !win.isDestroyed()) { win.setFocusable(false); win.blur(); win.setAlwaysOnTop(true, overlayLevel); }
 }
 function requestHide() {
+  if (nativeDialogOpen) return;
   // Let the renderer commit an active editor before changing hit regions.
   send({ type: 'prepareHide' });
 }
@@ -341,7 +354,7 @@ function sampleCursor() {
     send({ type: 'cursorPoint', point: { x: point.x - bounds.x, y: point.y - bounds.y } });
   } else if (settings.gestureEnabled && mode === 'idle' && now >= dragUntil) {
     const display = screen.getDisplayNearestPoint(point);
-    if (circles.addPoint(point.x, point.y, display.bounds.height, now)) summon('ready');
+    if (circles.addPoint(point.x, point.y, display.bounds.height, now, settings.gestureDifficulty)) summon('ready');
   } else circles.reset();
 }
 function pollCursor() {
@@ -374,7 +387,7 @@ function trayImage() {
   return nativeImage.createFromBitmap(pixels, { width: size, height: size, scaleFactor: 1 });
 }
 function requestExit() {
-  if (quitting || exitRequested) return;
+  if (quitting || exitRequested || nativeDialogOpen) return;
   exitRequested = true;
   setReadyEscape(false);
   // The renderer may decline because a draft is open. This guard only debounces
@@ -400,6 +413,18 @@ async function shutdown() {
 function validateSender(event) {
   if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame || event.senderFrame.url !== rendererUrl) throw new Error('An unauthorized page request was rejected.');
 }
+async function pickFile(method, options) {
+  // Keep global summons and stale drag regions from changing the parent while
+  // Windows owns a modal picker. Closing it never activates a background app.
+  nativeDialogOpen = true; dragUntil = 0; setInteractive(false);
+  if (activationPending) cancelActivation();
+  try { return await dialog[method](win, options); }
+  finally {
+    nativeDialogOpen = false;
+    if (win && !win.isDestroyed() && win.isFocused() && mode !== 'idle') win.setAlwaysOnTop(true, overlayLevel);
+    try { refreshHitTest(screen.getCursorScreenPoint()); } catch { setInteractive(false); }
+  }
+}
 async function invoke(method, payload) {
   await startup;
   if (method === 'bootstrap') return stateEnvelope();
@@ -415,14 +440,14 @@ async function invoke(method, payload) {
   } else if (method === 'createWorkspace') {
     result = await bridge.request(method, { name: payload.name, folder: settings.dataFolder }); acceptState(result, false); await rememberOpenFiles();
   } else if (method === 'openWorkspace' || method === 'recoverWorkspace') {
-    const picked = await dialog.showOpenDialog(win, { title: method === 'recoverWorkspace' ? 'Select a workspace to recover from .bak (the original will be preserved)' : 'Open workspace', defaultPath: settings.dataFolder, filters: [{ name: 'DeskGhost workspace', extensions: ['json'] }], properties: ['openFile'] });
+    const picked = await pickFile('showOpenDialog', { title: method === 'recoverWorkspace' ? 'Select a workspace to recover from .bak (the original will be preserved)' : 'Open workspace', defaultPath: settings.dataFolder, filters: [{ name: 'DeskGhost workspace', extensions: ['json'] }], properties: ['openFile'] });
     if (picked.canceled) return stateEnvelope();
     result = await bridge.request(method, { path: picked.filePaths[0] }); acceptState(result, false); await rememberOpenFiles();
   } else if (method === 'saveAs' || method === 'exportWorkspace') {
     const document = lastState.documents.find(d => d.id === (payload.workspaceId || lastState.activeWorkspaceId));
     if (!document) throw new Error('Open a workspace first.');
     const safeName = document.workspace.name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').slice(0, 90);
-    const picked = await dialog.showSaveDialog(win, { title: method === 'saveAs' ? 'Save a copy and continue (choose a new file)' : 'Export workspace (choose a new file)', defaultPath: path.join(settings.dataFolder, safeName + '-' + Date.now() + '.deskghost.json'), filters: [{ name: 'DeskGhost workspace', extensions: ['json'] }] });
+    const picked = await pickFile('showSaveDialog', { title: method === 'saveAs' ? 'Save a copy and continue (choose a new file)' : 'Export workspace (choose a new file)', defaultPath: path.join(settings.dataFolder, safeName + '-' + Date.now() + '.deskghost.json'), filters: [{ name: 'DeskGhost workspace', extensions: ['json'] }] });
     if (picked.canceled || !picked.filePath) return stateEnvelope();
     if (bridge.failed) {
       await rescueSnapshot(document, picked.filePath, method === 'saveAs');
@@ -435,11 +460,11 @@ async function invoke(method, payload) {
     const previous = settings;
     const candidate = { ...settings };
     if (method === 'chooseDataFolder') {
-      const picked = await dialog.showOpenDialog(win, { title: 'Choose the data folder for new workspaces', defaultPath: settings.dataFolder, properties: ['openDirectory', 'createDirectory'] });
+      const picked = await pickFile('showOpenDialog', { title: 'Choose the data folder for new workspaces', defaultPath: settings.dataFolder, properties: ['openDirectory', 'createDirectory'] });
       if (picked.canceled) return stateEnvelope();
       candidate.dataFolder = picked.filePaths[0];
     } else {
-      for (const key of ['effects', 'gestureEnabled', 'idleRoamSeconds', 'dismissSpeed', 'createHotkey', 'graphHotkey']) if (Object.hasOwn(payload, key)) candidate[key] = payload[key];
+      for (const key of ['effects', 'gestureEnabled', 'gestureDifficulty', 'idleRoamSeconds', 'dismissSpeed', 'createHotkey', 'graphHotkey']) if (Object.hasOwn(payload, key)) candidate[key] = payload[key];
     }
     checkSettings(candidate); configureHotkeys(candidate);
     try { await saveSettings(true, candidate); } catch (error) { configureHotkeys(previous); throw error; }
@@ -499,6 +524,21 @@ else {
     });
     win.webContents.on('render-process-gone', () => { rendererReady = false; cancelActivation(); setReadyEscape(false); regions = []; dragUntil = 0; setInteractive(false); win.hide(); warningList.push('The interface process stopped. Saved data is preserved; click the tray icon to reload.'); });
     win.webContents.on('unresponsive', () => { regions = []; dragUntil = 0; setInteractive(false); });
+    win.on('blur', () => {
+      // Re-showing the idle window can deliver its old blur after native focus
+      // has already returned. Only a current loss of focus may lower the window
+      // or cancel the explicit summon that just activated keyboard input.
+      if (win.isFocused()) return;
+      if (activationPending) cancelActivation();
+      dragUntil = 0; setInteractive(false);
+      // Alt+Tab preserves the live card and scene, but they must no longer sit
+      // above the application the user chose. A click/hotkey restores the layer.
+      if (mode === 'graph' || mode === 'create') win.setAlwaysOnTop(false);
+    });
+    win.on('focus', () => {
+      if (win.isFocused() && mode !== 'idle' && !nativeDialogOpen) win.setAlwaysOnTop(true, overlayLevel);
+      try { refreshHitTest(screen.getCursorScreenPoint()); } catch { setInteractive(false); }
+    });
     win.on('close', event => { if (!quitting) { event.preventDefault(); requestHide(); } });
     win.webContents.on('did-finish-load', () => { rendererReady = true; mode = 'graph'; const requestedId = activateWindow(); send({ type: 'summon', activationId: requestedId, mode, point: { x: area.width / 2, y: area.height / 2 } }); });
     ipcMain.handle('deskghost:invoke', (event, method, payload = {}) => {
@@ -523,9 +563,9 @@ else {
     tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Create task', click: () => summon('create') }, { label: 'Task graph', click: openGraph }, { type: 'separator' }, { label: 'Hide', click: requestHide }, { label: 'Quit DeskGhost', click: requestExit }]));
     try { configureHotkeys(settings, true); } catch (error) { warningList.push(error.message); }
     pollCursor();
-    powerMonitor.on('suspend', () => { suspended = true; clearTimeout(sampleTimer); circles.reset(); setReadyEscape(false); setRoaming(false); });
-    powerMonitor.on('resume', () => { suspended = false; lastCursor = null; cursorFailures = 0; setReadyEscape(mode === 'ready'); pollCursor(); });
-    screen.on('display-removed', () => { if (win && !win.isDestroyed()) { regions = []; win.setBounds(screen.getPrimaryDisplay().workArea); if (mode === 'ready') summon('ready'); else send({ type: 'summon', activationId, mode, point: { x: 300, y: 200 } }); } });
+    powerMonitor.on('suspend', () => { suspended = true; clearTimeout(sampleTimer); if (activationPending) cancelActivation(); dragUntil = 0; circles.reset(); speedDismiss.reset(); setInteractive(false); setReadyEscape(false); setRoaming(false); });
+    powerMonitor.on('resume', () => { suspended = false; lastCursor = null; cursorFailures = 0; speedDismiss.reset(Date.now()); setReadyEscape(mode === 'ready'); pollCursor(); });
+    screen.on('display-removed', () => { if (win && !win.isDestroyed()) { regions = []; dragUntil = 0; setInteractive(false); win.setBounds(screen.getPrimaryDisplay().workArea); if (mode === 'ready') summon('ready'); } });
     screen.on('display-metrics-changed', () => { if (win && !win.isDestroyed()) { const display = screen.getDisplayMatching(win.getBounds()); regions = []; win.setBounds(display.workArea); } });
     await win.loadFile(rendererPath);
   }).catch(error => {

@@ -84,7 +84,9 @@ static void Transfer()
     var card = source.CreateTask("Moving card", "Keep description", "Research", [first.Id], notes: "Long notes\nKeep these too");
     var last = source.CreateTask("Last", "Keep successor", "", [card.Id]);
     source.AddLink(first.Id, last.Id);
+    source.SetState(first.Id, TaskState.Stopped);
     source.SetState(card.Id, TaskState.Completed);
+    source.SetState(last.Id, TaskState.Completed);
     source.ArchiveTask(card.Id);
     source.UnarchiveTask(card.Id);
     source.ArchiveTask(card.Id);
@@ -411,9 +413,12 @@ static void Lifecycle()
     session.SetState(a.Id, TaskState.Stopped);
     Check(session.Workspace.Tasks.Single(t => t.Id == b.Id).State == TaskState.NotStarted,
         "Stopping a task must not cascade to descendants.");
+    Reject<WorkspaceValidationException>(() => session.ArchiveTask(a.Id));
+    session.SetState(b.Id, TaskState.Completed);
+    session.SetState(c.Id, TaskState.Stopped);
     session.ArchiveTask(a.Id);
-    Check(session.Workspace.Tasks.Single(t => t.Id == a.Id).IsArchived && session.Workspace.Links.Count == 2,
-        "Archiving must retain content and relationships.");
+    Check(session.Workspace.Tasks.All(t => t.IsArchived) && session.Workspace.Links.Count == 2,
+        "Archiving a terminal chain must retain content and relationships.");
     session.UnarchiveTask(a.Id);
     var restoredArchive = session.Workspace.Tasks.Single(t => t.Id == a.Id);
     Check(!restoredArchive.IsArchived && restoredArchive.ArchiveHistory.Count == 2 &&
@@ -432,6 +437,143 @@ static void Lifecycle()
     Check(session.Workspace.Tasks.Single(t => t.Id == b.Id).DeletedAt is null &&
           session.Workspace.Links.Count == 0, "Explicit card restoration must not invent relationships.");
     WorkspaceValidator.Validate(session.Workspace);
+
+    // A branch/merge diamond must be traversed in both directions even when the
+    // operation starts at one of its middle cards. Unrelated and trashed cards
+    // may still be active work and must not block the completed chain.
+    var chain = NewSession();
+    var first = chain.CreateTask("Root", "Keep chain content", "", state: TaskState.Completed);
+    var left = chain.CreateTask("Left branch", "", "", [first.Id], state: TaskState.Stopped);
+    var right = chain.CreateTask("Right branch", "", "", [first.Id], state: TaskState.Completed);
+    var merge = chain.CreateTask("Merge", "", "", [left.Id, right.Id]);
+    var independent = chain.CreateTask("Independent", "", "");
+    var deleted = chain.CreateTask("Deleted former branch", "", "", [first.Id]);
+    chain.DeleteTask(deleted.Id);
+    var members = new HashSet<Guid> { first.Id, left.Id, right.Id, merge.Id };
+    chain.SetState(merge.Id, TaskState.Completed);
+    Check(chain.Undo() && chain.CanRedo, "The rejection fixture must include pending redo.");
+    var before = JsonSerializer.Serialize(chain.Workspace);
+    var revision = chain.Revision;
+    Reject<WorkspaceValidationException>(() => chain.ArchiveTask(left.Id));
+    Check(JsonSerializer.Serialize(chain.Workspace) == before && chain.Revision == revision && chain.CanRedo,
+        "An unfinished member must reject the entire archive without changing cards, history, revision or redo.");
+    Check(chain.Redo(), "Rejected chain archival must preserve the previous redo.");
+    before = JsonSerializer.Serialize(chain.Workspace);
+    revision = chain.Revision;
+    chain.ArchiveTask(left.Id);
+    var archived = JsonSerializer.Serialize(chain.Workspace);
+    Check(chain.Revision == revision + 1 && chain.Workspace.Tasks.All(task => task.IsArchived == members.Contains(task.Id)) &&
+          chain.Workspace.Links.Count == 4 && chain.Workspace.Tasks.Where(task => members.Contains(task.Id)).All(task => task.ArchiveHistory.Count == 1) &&
+          chain.Workspace.Tasks.Where(task => members.Contains(task.Id)).Select(task => task.ArchiveHistory[0].At).Distinct().Count() == 1,
+        "One atomic archive must include root, both branches and merge with a shared event time, retaining every edge.");
+    Check(chain.Undo() && JsonSerializer.Serialize(chain.Workspace) == before &&
+          chain.Redo() && JsonSerializer.Serialize(chain.Workspace) == archived,
+        "One undo/redo must restore the complete chain's exact snapshots.");
+    revision = chain.Revision;
+    chain.ArchiveTask(merge.Id);
+    Check(chain.Revision == revision && JsonSerializer.Serialize(chain.Workspace) == archived,
+        "Archiving an already archived chain must not add history events.");
+    chain.UnarchiveTask(right.Id);
+    var restored = JsonSerializer.Serialize(chain.Workspace);
+    Check(chain.Workspace.Tasks.All(task => !task.IsArchived) &&
+          chain.Workspace.Tasks.Where(task => members.Contains(task.Id)).All(task => task.ArchiveHistory.Count == 2),
+        "Restoring any member must restore the full chain and preserve its archive history.");
+    Check(chain.Undo() && JsonSerializer.Serialize(chain.Workspace) == archived &&
+          chain.Redo() && JsonSerializer.Serialize(chain.Workspace) == restored,
+        "Restoring a chain is also a single undoable transaction.");
+
+    var mixed = chain.Workspace.DeepClone();
+    var mixedRoot = mixed.Tasks.Single(task => task.Id == first.Id);
+    mixedRoot.IsArchived = true;
+    mixedRoot.ArchiveHistory.Add(new ArchiveEvent { At = DateTimeOffset.UtcNow, Action = ArchiveAction.Archived });
+    var mixedBefore = JsonSerializer.Serialize(mixed);
+    var legacy = new WorkspaceSession(mixed);
+    Check(JsonSerializer.Serialize(legacy.Workspace) == mixedBefore && legacy.Revision == 0,
+        "Older mixed-archive chains remain valid and are not silently migrated when loaded.");
+    legacy.UnarchiveTask(left.Id);
+    Check(legacy.Workspace.Tasks.All(task => !task.IsArchived) &&
+          legacy.Workspace.Tasks.Single(task => task.Id == first.Id).ArchiveHistory.Count == 4 &&
+          legacy.Workspace.Tasks.Single(task => task.Id == left.Id).ArchiveHistory.Count == 2,
+        "Restoring from an unarchived member must restore archived peers without adding events to unchanged cards.");
+    Check(legacy.Undo() && JsonSerializer.Serialize(legacy.Workspace) == mixedBefore,
+        "Undo must restore the historical mixture exactly.");
+    legacy.ArchiveTask(first.Id);
+    Check(legacy.Workspace.Tasks.Where(task => members.Contains(task.Id)).All(task => task.IsArchived && task.ArchiveHistory.Count == 3),
+        "Archiving from an already archived member must archive its remaining peers only.");
+
+    var mixedLinks = new WorkspaceSession(mixed);
+    mixedLinks.AddLink(first.Id, left.Id);
+    mixedLinks.ConnectTask(first.Id, right.Id);
+    mixedLinks.RewireLink(first.Id, left.Id, first.Id, left.Id);
+    Check(mixedLinks.Revision == 0 && JsonSerializer.Serialize(mixedLinks.Workspace) == mixedBefore,
+        "Existing mixed-archive links remain valid, including idempotent add, connect and rewire commands.");
+    foreach (var change in new Action[]
+    {
+        () => mixedLinks.AddLink(first.Id, independent.Id),
+        () => mixedLinks.ConnectTask(first.Id, independent.Id),
+        () => mixedLinks.ConnectTask(independent.Id, first.Id),
+        () => mixedLinks.RewireLink(left.Id, merge.Id, first.Id, merge.Id),
+        () => mixedLinks.CreateTask("Rejected connected task", "", "", [first.Id]),
+        () => mixedLinks.CreateTask("Rejected terminal connected task", "", "", [left.Id, first.Id], state: TaskState.Completed)
+    })
+    {
+        Reject<WorkspaceValidationException>(change);
+        Check(mixedLinks.Revision == 0 && !mixedLinks.CanUndo && JsonSerializer.Serialize(mixedLinks.Workspace) == mixedBefore,
+            "New active/archive connections must reject without creating, shifting, removing or changing any tasks or links.");
+    }
+    mixedLinks.MoveTask(first.Id, 0, 7);
+    mixedLinks.UpdateTask(first.Id, "Edited historical root", "Preserve historical links", "");
+    mixedLinks.RemoveLink(first.Id, left.Id);
+    var afterDisconnect = JsonSerializer.Serialize(mixedLinks.Workspace);
+    Reject<WorkspaceValidationException>(() => mixedLinks.AddLink(first.Id, left.Id));
+    Check(JsonSerializer.Serialize(mixedLinks.Workspace) == afterDisconnect,
+        "Legacy mixed chains remain editable and movable; a removed cross-archive link cannot be recreated.");
+    var transferTarget = NewSession();
+    mixedLinks.PrepareTransferTo(transferTarget, first.Id).Commit();
+    Check(transferTarget.Workspace.Tasks.Single().IsArchived && mixedLinks.Workspace.Links.Count == 2,
+        "An archived card in a historical mixed chain may still transfer, removing only its current incident links.");
+    legacy = new WorkspaceSession(mixed);
+    legacy.UnarchiveTask(left.Id);
+    legacy.AddLink(first.Id, independent.Id);
+    Check(legacy.Workspace.Links.Any(link => link.SourceId == first.Id && link.TargetId == independent.Id),
+        "Restoring the old archived chain permits normal connections to active tasks again.");
+
+    var archivedPeers = NewSession();
+    var archivedSource = archivedPeers.CreateTask("Archived source", "", "", state: TaskState.Completed);
+    var archivedTarget = archivedPeers.CreateTask("Archived target", "", "", column: 1, state: TaskState.Stopped);
+    archivedPeers.ArchiveTask(archivedSource.Id);
+    archivedPeers.ArchiveTask(archivedTarget.Id);
+    archivedPeers.AddLink(archivedSource.Id, archivedTarget.Id);
+    Check(archivedPeers.Workspace.Links.Count == 1 && archivedPeers.Workspace.Tasks.All(task => task.IsArchived),
+        "Connecting two archived chains is valid because it preserves their uniform archive state.");
+
+    // Removing just one side of the diamond leaves an alternate undirected
+    // path. Removing both incident links makes the former branch independent.
+    chain.SetState(first.Id, TaskState.InProgress);
+    chain.RemoveLink(first.Id, left.Id);
+    Reject<WorkspaceValidationException>(() => chain.ArchiveTask(left.Id));
+    chain.RemoveLink(left.Id, merge.Id);
+    chain.ArchiveTask(left.Id);
+    chain.MoveTask(left.Id, 0, 4);
+    Check(chain.Workspace.Tasks.Single(task => task.Id == left.Id) is { IsArchived: true, Column: 0, Row: 4 } &&
+          chain.Workspace.Tasks.Where(task => task.Id != left.Id).All(task => !task.IsArchived) &&
+          chain.Workspace.Tasks.Single(task => task.Id == independent.Id).State == TaskState.NotStarted,
+        "After explicit disconnection, the former branch archives and moves independently with no hidden source relationship.");
+    Reject<WorkspaceValidationException>(() => chain.MoveTask(first.Id, 2, 0));
+    Check(chain.Workspace.Tasks.Single(task => task.Id == first.Id).Column == 0,
+        "The links that remain must still enforce their rightward layout.");
+
+    var fullHistory = mixed.DeepClone();
+    var exhausted = fullHistory.Tasks.Single(task => task.Id == right.Id);
+    exhausted.ArchiveHistory = Enumerable.Range(0, WorkspaceLimits.MaxArchiveEventsPerTask)
+        .Select(index => new ArchiveEvent { At = DateTimeOffset.UtcNow, Action = index % 2 == 0 ? ArchiveAction.Archived : ArchiveAction.Unarchived }).ToList();
+    var bounded = new WorkspaceSession(fullHistory);
+    var boundedBefore = JsonSerializer.Serialize(bounded.Workspace);
+    Reject<WorkspaceValidationException>(() => bounded.ArchiveTask(left.Id));
+    Check(JsonSerializer.Serialize(bounded.Workspace) == boundedBefore && bounded.Revision == 0 && !bounded.CanUndo,
+        "An exhausted archive history on one member must reject the full chain without partial changes.");
+    Reject<WorkspaceValidationException>(() => bounded.ArchiveTask(deleted.Id));
+    Reject<WorkspaceValidationException>(() => bounded.UnarchiveTask(deleted.Id));
 }
 
 static void History()

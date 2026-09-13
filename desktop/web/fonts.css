@@ -6,6 +6,17 @@
   font-display: swap;
 }
 
+/* Map a real local bold face to the heading's regular slot, so mixed titles
+   keep Bungee Regular for Latin and bold Chinese without synthetic Latin bold. */
+@font-face {
+  font-family: 'Chinese Heading Bold';
+  src: local('Microsoft YaHei Bold'), local('MicrosoftYaHei-Bold'), local('Microsoft YaHei UI Bold'), local('MicrosoftYaHeiUI-Bold'), local('SimHei');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+2E80-2FFF, U+3000-303F, U+31C0-31EF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE10-FE1F, U+FE30-FE4F, U+FF00-FFEF, U+20000-323AF;
+}
+
 @font-face {
   font-family: 'Teko';
   src: url('./assets/fonts/Teko-Variable.ttf') format('truetype');
@@ -42,7 +53,7 @@
 }
 
 :root {
-  --font-heading: 'Bungee', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --font-heading: 'Bungee', 'Chinese Heading Bold', 'Microsoft YaHei', 'Segoe UI', sans-serif;
   --font-body: 'Teko', 'Microsoft YaHei', 'Segoe UI', sans-serif;
   --font-tag: 'Smiley Sans', 'Microsoft YaHei', 'Segoe UI', sans-serif;
   --font-note: 'Teko', 'Microsoft YaHei', 'Segoe UI', sans-serif;

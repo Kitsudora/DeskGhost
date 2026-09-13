@@ -1,8 +1,9 @@
 const translate = y => `translate3d(0, ${y}px, 0)`;
+const hookTranslate = y => `translate3d(-50%, ${y}px, 0)`;
 
 /** One rigid panel: a deliberate pull, a free ring above the hook, then its weight
- * settling onto the hook. The ring travels with the panel; both hook faces stay
- * fixed. Only translation is animated, including interrupted movements. */
+ * settling onto the hook. Both hook faces descend together before the ring
+ * arrives, and withdraw only after it clears. Every movement is translation. */
 export class SceneMotion {
   constructor(scene, hook, { onLayout = () => {}, onSettled = () => {} } = {}) {
     this.scene = scene;
@@ -11,6 +12,7 @@ export class SceneMotion {
     this.onSettled = onSettled;
     this.open = false;
     this.animation = null;
+    this.hookAnimations = [];
     this.frame = 0;
     this.resizeFrame = 0;
     this.resolve = null;
@@ -28,8 +30,9 @@ export class SceneMotion {
         this.resizeFrame = 0;
         if (this.animation) {
           const y = this.currentY();
-          this.cancelAnimation();
-          this.start(y);
+          const hookY = this.currentY(this.hook);
+          this.cancelAnimation(false);
+          this.start(y, hookY);
         } else { this.settle(false); this.onLayout(); }
       });
     };
@@ -40,10 +43,14 @@ export class SceneMotion {
   }
 
   get hiddenY() { return window.innerHeight + 80; }
+  get hiddenHookY() {
+    const style = getComputedStyle(this.hook);
+    return -(parseFloat(style.top) + this.hook.getBoundingClientRect().height + 12);
+  }
   get instant() { return document.hidden || this.reduced.matches || document.documentElement.dataset.effects === 'off'; }
 
-  currentY() {
-    const transform = getComputedStyle(this.scene).transform;
+  currentY(element = this.scene) {
+    const transform = getComputedStyle(element).transform;
     return transform === 'none' ? 0 : new DOMMatrixReadOnly(transform).m42;
   }
 
@@ -55,17 +62,25 @@ export class SceneMotion {
       return this.pending ?? Promise.resolve(true);
     }
     const from = this.currentY();
+    const hookFrom = this.currentY(this.hook);
     this.cancelAnimation();
     this.open = next;
     this.scene.dataset.open = String(next);
     this.scene.inert = !next;
     if (immediate || this.instant) { this.settle(); return Promise.resolve(true); }
-    return this.start(from);
+    return this.start(from, hookFrom);
   }
 
-  start(from) {
+  start(from, hookFrom) {
     const distance = Math.abs((this.open ? 0 : this.hiddenY) - from);
-    if (distance < .5 || this.instant) { this.settle(); return Promise.resolve(true); }
+    const hookTarget = this.open ? 0 : this.hiddenHookY;
+    if ((distance < .5 && Math.abs(hookTarget - hookFrom) < .5) || this.instant) {
+      const resolve = this.resolve;
+      this.resolve = this.pending = null;
+      this.settle();
+      resolve?.(true);
+      return Promise.resolve(true);
+    }
     const fraction = Math.min(1, distance / this.hiddenY);
     const duration = (this.open ? 1500 : 1250) * Math.max(.28, Math.sqrt(fraction));
     const overshoot = 16;
@@ -91,7 +106,26 @@ export class SceneMotion {
     this.scene.style.transform = translate(from);
     this.scene.dataset.moving = 'true';
     this.hook.dataset.visible = this.frontHook.dataset.visible = 'true';
-    this.pending = new Promise(resolve => { this.resolve = resolve; });
+    this.hook.dataset.moving = this.frontHook.dataset.moving = 'true';
+    if (!this.pending) this.pending = new Promise(resolve => { this.resolve = resolve; });
+    const ring = this.scene.querySelector('#scene-ring');
+    const hookBottom = parseFloat(getComputedStyle(this.hook).top) + this.hook.getBoundingClientRect().height;
+    const clearY = ring ? hookBottom - (ring.getBoundingClientRect().top - from) + 10 : 80;
+    // During a full close the panel lifts first. Keep the hook in place through
+    // that lift and the first half of its descent, well beyond the ring's edge.
+    // A reversal with the ring already below the hook can retract immediately.
+    const hold = !this.open && from < clearY ? .62 : 0;
+    const hookEnd = this.open ? .34 : 1;
+    const hookFrames = [
+      { transform: hookTranslate(hookFrom), offset: 0, easing: 'cubic-bezier(.42, 0, .3, 1)' },
+      ...(hold ? [{ transform: hookTranslate(hookFrom), offset: hold, easing: 'cubic-bezier(.42, 0, .6, 1)' }] : []),
+      { transform: hookTranslate(hookTarget), offset: hookEnd },
+      ...(hookEnd < 1 ? [{ transform: hookTranslate(hookTarget), offset: 1 }] : [])
+    ];
+    this.hookAnimations = [this.hook, this.frontHook].map(element => {
+      element.style.transform = hookTranslate(hookFrom);
+      return element.animate(hookFrames, { duration, fill: 'both' });
+    });
     const animation = this.scene.animate(frames, { duration, fill: 'both' });
     this.animation = animation;
     animation.onfinish = () => { if (this.animation === animation) this.finish(); };
@@ -99,23 +133,29 @@ export class SceneMotion {
       this.frame = 0;
       if (this.animation !== animation) return;
       this.onLayout();
-      this.frame = requestAnimationFrame(update);
+      if (this.animation === animation) this.frame = requestAnimationFrame(update);
     };
     update();
     return this.pending;
   }
 
-  cancelAnimation() {
+  cancelAnimation(resolvePending = true) {
     if (this.animation) {
       this.scene.style.transform = translate(this.currentY());
       this.animation.onfinish = null;
       this.animation.cancel();
       this.animation = null;
     }
+    const hookY = this.currentY(this.hook);
+    for (const element of [this.hook, this.frontHook]) element.style.transform = hookTranslate(hookY);
+    for (const animation of this.hookAnimations) animation.cancel();
+    this.hookAnimations = [];
     if (this.frame) cancelAnimationFrame(this.frame);
     this.frame = 0;
-    this.resolve?.(false);
-    this.resolve = this.pending = null;
+    if (resolvePending) {
+      this.resolve?.(false);
+      this.resolve = this.pending = null;
+    }
   }
 
   settle(notify = true) {
@@ -124,6 +164,10 @@ export class SceneMotion {
     this.scene.dataset.moving = 'false';
     this.scene.inert = !this.open;
     this.hook.dataset.visible = this.frontHook.dataset.visible = String(this.open);
+    this.hook.dataset.moving = this.frontHook.dataset.moving = 'false';
+    for (const element of [this.hook, this.frontHook]) {
+      element.style.transform = hookTranslate(this.open ? 0 : this.hiddenHookY);
+    }
     if (notify) {
       this.onLayout();
       this.onSettled(this.open);
@@ -144,6 +188,7 @@ export class SceneMotion {
   dispose() {
     this.disposed = true;
     this.cancelAnimation();
+    this.hook.dataset.visible = 'false';
     if (this.resizeFrame) cancelAnimationFrame(this.resizeFrame);
     this.reduced.removeEventListener('change', this.handleEffects);
     document.removeEventListener('visibilitychange', this.handleVisibility);

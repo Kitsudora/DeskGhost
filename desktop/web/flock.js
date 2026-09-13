@@ -23,7 +23,7 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
  * compatibility alias for hidden. The application decides when to start roaming.
  */
 export class Flock {
-  constructor(canvas, { onReady, onDismiss } = {}) {
+  constructor(canvas, { onReady, onDismiss, onAssembled } = {}) {
     if (!canvas?.getContext) throw new TypeError('Flock requires a canvas.');
     this.canvas = canvas;
     this._context = canvas.getContext('2d', { alpha: true });
@@ -32,6 +32,7 @@ export class Flock {
     this._document = canvas.ownerDocument ?? document;
     this._onReady = typeof onReady === 'function' ? onReady : null;
     this._onDismiss = typeof onDismiss === 'function' ? onDismiss : null;
+    this._onAssembled = typeof onAssembled === 'function' ? onAssembled : null;
     this._mode = 'hidden';
     this._effects = 'high';
     this._boids = [];
@@ -57,6 +58,7 @@ export class Flock {
       if (this._document.hidden) {
         this._stop();
         if (this._mode === 'disperse') this._finishDismiss();
+        else if (this._mode === 'card') this._finishAssembly();
       } else this._queue();
     };
     this._window.addEventListener('resize', this._onResize);
@@ -69,25 +71,31 @@ export class Flock {
     if (!MODES.has(mode)) throw new RangeError('Unknown flock mode: ' + mode);
     if (mode === 'idle') mode = 'hidden';
     if (point) this.setTarget(point);
-    if (bounds) this._setBounds(bounds);
+    const hasBounds = bounds ? this._setBounds(bounds) : false;
     if (mode === this._mode) return this;
     const previous = this._mode;
     if (mode === 'disperse') {
       this._disperseCenter = finite(point?.x) && finite(point?.y)
-        ? { ...this._target } : this._motionCenter(previous);
+        ? { ...this._target } : this._motionCenter(hasBounds ? 'card' : previous);
     }
     this._mode = mode;
     this._modeTime = 0;
+    if (previous === 'card') this._onAssembled?.({ cancelled: true });
     if (mode === 'hidden') {
       this._park();
       return this;
     }
     if (mode === 'disperse') {
-      if (this._effects === 'off' || previous === 'hidden' || this._document.hidden || !this._boids.length) {
+      if (this._effects === 'off' || this._document.hidden || (previous === 'hidden' && !hasBounds)) {
         this._finishDismiss();
         return this;
       }
-      for (const boid of this._boids) this._exitDestination(boid);
+      if (hasBounds) this._releaseCardParticles(previous);
+      if (!this._boids.length) {
+        this._finishDismiss();
+        return this;
+      }
+      this._exitDestinations();
     } else if (this._effects !== 'off') {
       if (previous === 'hidden' || previous === 'disperse') this._spawnPhase = random(0, TAU);
       this._ensureBoids();
@@ -98,10 +106,16 @@ export class Flock {
           boid.delay = 0; boid.departed = false;
           boid.arrivalWeight = mode === 'ring' || mode === 'card' ? 1 : 0;
           boid.arrivalAge = 0;
+          boid.absorbedAt = null;
         }
       }
       if (mode === 'roaming') for (const boid of this._boids) this._roamingDestination(boid, true);
       if (mode === 'ring') for (const boid of this._boids) this._ringDestination(boid, true);
+    }
+    if (mode === 'card' && (this._effects === 'off' || this._document.hidden)) {
+      this._onReady?.({ mode });
+      this._finishAssembly();
+      return this;
     }
     this._queue();
     if (mode === 'ring' || mode === 'card') this._onReady?.({ mode });
@@ -129,13 +143,14 @@ export class Flock {
     if (effects === 'off') {
       this._park();
       if (this._mode === 'disperse') this._finishDismiss();
+      else if (this._mode === 'card') this._finishAssembly();
     } else if (this._mode !== 'hidden') {
       if (wasOff) this._spawnPhase = random(0, TAU);
       this._ensureBoids();
       if (wasOff) for (const boid of this._boids) this._spawn(boid);
       if (this._mode === 'roaming') for (const boid of this._boids) this._roamingDestination(boid, true);
       if (this._mode === 'ring') for (const boid of this._boids) this._ringDestination(boid, true);
-      if (this._mode === 'disperse') for (const boid of this._boids) this._exitDestination(boid);
+      if (this._mode === 'disperse') this._exitDestinations();
       this._queue();
     }
     return this;
@@ -176,20 +191,21 @@ export class Flock {
     this._document.removeEventListener('visibilitychange', this._onVisibility);
     this._clear();
     this._boids.length = 0;
-    this._onReady = this._onDismiss = null;
+    this._onReady = this._onDismiss = this._onAssembled = null;
     this._destroyed = true;
     this.canvas.width = this.canvas.height = 1;
   }
 
   _setBounds(bounds) {
     const x = bounds.x ?? bounds.left, y = bounds.y ?? bounds.top;
-    if (![x, y, bounds.width, bounds.height].every(finite) || bounds.width <= 0 || bounds.height <= 0) return;
+    if (![x, y, bounds.width, bounds.height].every(finite) || bounds.width <= 0 || bounds.height <= 0) return false;
     this._bounds = {
       x: clamp(x - this._offset.x, -32_768, 32_768),
       y: clamp(y - this._offset.y, -32_768, 32_768),
       width: clamp(bounds.width, 1, 32_768),
       height: clamp(bounds.height, 1, 32_768)
     };
+    return true;
   }
 
   _ensureBoids() {
@@ -203,7 +219,7 @@ export class Flock {
         mass: random(0.82, 1.18), pace: random(0.88, 1.08), size,
         ringX: 0, ringY: 0, ringGoalX: 0, ringGoalY: 0,
         ringVX: 0, ringVY: 0, ringAt: 0, ringInitialized: false,
-        arrivalWeight: 0, arrivalAge: 0,
+        arrivalWeight: 0, arrivalAge: 0, absorbedAt: null,
         u: Math.random(), v: Math.random(), opacity: 0, delay: 0,
         surfaceAlpha: random(0.9, 1), interior: index % 6 === 0,
         palette: KEYCAP_PALETTES[index % 9 === 0 ? 2 : index % 4 === 0 ? 1 : 0],
@@ -247,6 +263,7 @@ export class Flock {
     boid.ringInitialized = false;
     boid.arrivalWeight = this._mode === 'ring' || this._mode === 'card' ? 1 : 0;
     boid.arrivalAge = 0;
+    boid.absorbedAt = null;
     boid.delay = this._modeTime + (this._mode === 'roaming' ? random(0, 3.5) : random(0, 0.09));
     // Initial drift is individual and directionless. Destinations, rather than a
     // launch impulse or a shared path, are what bring the fragments onto screen.
@@ -273,15 +290,52 @@ export class Flock {
       boid.y < -margin || boid.y > this._height + margin;
   }
 
-  _exitDestination(boid) {
-    boid.delay = 0;
-    boid.departed = this._outside(boid);
+  _exitDestinations() {
     const center = this._motionCenter('disperse');
-    const dx = boid.x - center.x, dy = boid.y - center.y, distance = Math.hypot(dx, dy);
-    const angle = distance > 0.001 ? Math.atan2(dy, dx) : boid.phase;
-    const radius = Math.max(this._coverRadius(center), distance) + random(85, 150);
-    boid.tx = center.x + Math.cos(angle) * radius;
-    boid.ty = center.y + Math.sin(angle) * radius;
+    const visible = [];
+    for (const boid of this._boids) {
+      boid.delay = 0;
+      boid.departed = boid.departed || this._outside(boid);
+      if (!boid.departed) visible.push(boid);
+    }
+    // After a fast cursor sweep the entire flock can trail on one side of the
+    // mouse. Reusing those bearings sends every particle in the same direction.
+    // Spread the exits around a full circle, keeping angular order to reduce
+    // crossing. Only destinations change; position and velocity stay continuous.
+    visible.sort((a, b) => Math.atan2(a.y - center.y, a.x - center.x) - Math.atan2(b.y - center.y, b.x - center.x));
+    const sector = TAU / Math.max(1, visible.length);
+    const phase = visible.reduce((sum, boid, index) =>
+      sum + Math.atan2(boid.y - center.y, boid.x - center.x) - (index + 0.5) * sector, 0) / Math.max(1, visible.length);
+    const cover = this._coverRadius(center);
+    visible.forEach((boid, index) => {
+      const angle = phase + (index + random(0.3, 0.7)) * sector;
+      const radius = Math.max(cover, Math.hypot(boid.x - center.x, boid.y - center.y)) + random(85, 150);
+      boid.tx = center.x + Math.cos(angle) * radius;
+      boid.ty = center.y + Math.sin(angle) * radius;
+    });
+  }
+
+  _cardDestination(boid, bounds) {
+    if (boid.interior) {
+      boid.tx = bounds.x + bounds.width * (0.12 + boid.u * 0.76);
+      boid.ty = bounds.y + bounds.height * (0.12 + boid.v * 0.76);
+    } else roundedPerimeter(bounds, (boid.index + 0.5) / this._boids.length, boid);
+  }
+
+  _releaseCardParticles(previous) {
+    this._ensureBoids();
+    for (const boid of this._boids) {
+      // Preserve visible arrivals in flight. Absorbed particles, including a
+      // completed assembly parked offscreen, emerge from their patch of paper.
+      // Not-yet-visible arrivals do the same so an immediate cancel still has
+      // a card to break apart instead of only invisible offscreen particles.
+      if (previous === 'card' && !boid.departed && boid.absorbedAt === null && !this._outside(boid)) continue;
+      this._cardDestination(boid, this._bounds);
+      boid.x = boid.tx; boid.y = boid.ty;
+      boid.vx = boid.vy = boid.ax = boid.ay = 0;
+      boid.opacity = 1; boid.delay = 0; boid.departed = false;
+      boid.absorbedAt = null; boid.arrivalWeight = boid.arrivalAge = 0;
+    }
   }
 
   _roamingDestination(boid, entering = false) {
@@ -345,6 +399,10 @@ export class Flock {
       this._finishDismiss();
       return;
     }
+    if (this._mode === 'card' && (this._boids.every(boid => boid.departed) || this._modeTime >= 2.4)) {
+      this._finishAssembly();
+      return;
+    }
     this._draw();
     this._queue();
   }
@@ -376,11 +434,7 @@ export class Flock {
         boid.tx = this._target.x + boid.ringX;
         boid.ty = this._target.y + boid.ringY;
       } else if (this._mode === 'card') {
-        const slot = (boid.index + 0.5) / this._boids.length;
-        if (boid.interior) {
-          boid.tx = bounds.x + bounds.width * (0.12 + boid.u * 0.76);
-          boid.ty = bounds.y + bounds.height * (0.12 + boid.v * 0.76);
-        } else roundedPerimeter(bounds, slot, boid);
+        this._cardDestination(boid, bounds);
       } else if (this._mode === 'roaming' &&
         (time >= boid.roamAt || Math.hypot(boid.tx - boid.x, boid.ty - boid.y) < 35)) {
         this._roamingDestination(boid);
@@ -460,7 +514,7 @@ export class Flock {
       }
       const avoidance = roaming ? 230 : ring ? 800 : 620;
       ax += separationX * avoidance; ay += separationY * avoidance;
-      if (neighbors) {
+      if (neighbors && !dispersing) {
         const alignment = ring ? 2.3 : 1.4, cohesion = ring ? 0.8 : 0.5;
         ax += (alignX / neighbors - boid.vx) * alignment + (cohesionX / neighbors - boid.x) * cohesion;
         ay += (alignY / neighbors - boid.vy) * alignment + (cohesionY / neighbors - boid.y) * cohesion;
@@ -476,7 +530,7 @@ export class Flock {
       // not a shared sinusoidal translation of the assembled shape.
       boid.wanderTurn = clamp((boid.wanderTurn + random(-2, 2) * dt) * Math.exp(-0.6 * dt), -1.4, 1.4);
       boid.wanderAngle += boid.wanderTurn * dt;
-      const wander = roaming ? 35 : ring ? 80 : 50;
+      const wander = dispersing ? 0 : roaming ? 35 : ring ? 80 : 50;
       ax += Math.cos(boid.wanderAngle) * wander; ay += Math.sin(boid.wanderAngle) * wander;
       // Approach the speed limit through a force, never by replacing the
       // integrated velocity vector. This also preserves inertia on mode changes.
@@ -514,7 +568,17 @@ export class Flock {
       // through turns instead of spinning to match every change of heading.
       const tilt = clamp(boid.vx / 700, -1, 1) * 0.22 + Math.sin(this._time * 0.65 + boid.phase) * 0.055;
       boid.tilt += (tilt - boid.tilt) * (1 - Math.exp(-4 * dt));
-      const alpha = this._mode === 'card' && boid.interior ? 0.18 : 1;
+      if (this._mode === 'card') {
+        // Each keycap reaches its own patch of paper and is absorbed there.
+        // There is no permanent animated outline behind an editable task card.
+        if (boid.absorbedAt === null && Math.hypot(boid.tx - boid.x, boid.ty - boid.y) < 28 && speed < 190)
+          boid.absorbedAt = this._modeTime;
+        if (boid.absorbedAt !== null && this._modeTime - boid.absorbedAt > 0.35) {
+          boid.departed = true; boid.opacity = 0;
+          continue;
+        }
+      }
+      const alpha = this._mode === 'card' && boid.absorbedAt !== null ? 0 : 1;
       boid.opacity += (alpha - boid.opacity) * (1 - Math.exp(-(roaming ? 2 : 12) * dt));
     }
   }
@@ -525,12 +589,15 @@ export class Flock {
     context.setTransform(this._dpr, 0, 0, this._dpr, 0, 0);
     context.textAlign = 'center';
     context.textBaseline = 'middle';
+    // Fade the last stragglers before the fixed deadline, including on very
+    // large displays where a screen-wide arrival can take a little longer.
+    const assemblyAlpha = this._mode === 'card' ? smoothstep(clamp((2.4 - this._modeTime) / 0.4, 0, 1)) : 1;
     for (const boid of this._boids) {
       if (boid.opacity < 0.005 || this._outside(boid)) continue;
       context.save();
       context.translate(boid.x, boid.y);
       context.rotate(boid.tilt);
-      context.globalAlpha = boid.opacity * boid.surfaceAlpha;
+      context.globalAlpha = boid.opacity * boid.surfaceAlpha * assemblyAlpha;
       const keycap = boid.keycap, palette = boid.palette;
       context.shadowColor = 'rgba(54, 54, 54, 0.26)';
       context.shadowBlur = this._effects === 'high' ? 3 : 1.5;
@@ -565,6 +632,13 @@ export class Flock {
     this._mode = 'hidden';
     this._park();
     this._onDismiss?.();
+  }
+
+  _finishAssembly() {
+    if (this._mode !== 'card') return;
+    this._mode = 'hidden';
+    this._park();
+    this._onAssembled?.({ cancelled: false });
   }
 }
 

@@ -1,4 +1,4 @@
-import { TaskGraph, graphGeometry } from './graph.js';
+import { TaskGraph } from './graph.js';
 import { Flock } from './flock.js';
 import { StickerController } from './sticker.js';
 import { mountCardLayers, createPaperTag, updatePaperTag, createNoteClip, fitCardText } from './paper.js';
@@ -8,6 +8,7 @@ import { CardCarry } from './card-carry.js';
 
 const $ = id => document.getElementById(id);
 const host = window.deskghost;
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const stateNames = { NotStarted: 'To do', InProgress: 'In progress', Completed: 'Done', Stopped: 'Stopped' };
 let state = { documents: [], settings: {}, activeWorkspaceId: null };
 let mode = 'graph';
@@ -26,10 +27,11 @@ let commandCount = 0;
 let settingsFolder = null;
 let composerSticker = null;
 let cardEntrance = null;
-let tagHoverTimer = 0;
 let transferRequest = null;
 let carry = null;
 let returning = null;
+let editorFocus = null;
+let navigationRevision = 0;
 
 function decorateKeys() {
   for (const button of document.querySelectorAll('button.key')) {
@@ -45,9 +47,9 @@ decorateKeys();
 document.body.append($('composer'), $('transfer-prompt'));
 $('desk-scene').append($('task-trash'));
 
-const flock = new Flock($('flock'));
+const flock = new Flock($('flock'), { onAssembled: finishCardAssembly });
 const sceneMotion = new SceneMotion($('desk-scene'), $('scene-hook'), {
-  onLayout: () => { queueRegions(); updateReturnTarget(); if (carry?.active?.moved && !carry.active.dropping) previewCarriedCard(carry.active); }
+  onLayout: () => { queueRegions(); updateReturnTarget(); carry?.refresh(); }
 });
 const graph = new TaskGraph($('graph-board'), {
   onSelect: ids => { selection = [...ids]; renderSelection(); },
@@ -71,11 +73,6 @@ const editorTags = { front: {}, back: {} };
 for (const side of ['front', 'back']) for (const kind of ['workspace', 'category']) {
   const button = createPaperTag({ kind, onClick: () => openTagPicker(kind, { focus: true, anchor: button }) });
   button.dataset.interactive = '';
-  button.addEventListener('pointerenter', event => {
-    if (event.pointerType !== 'mouse' || event.buttons) return;
-    clearTimeout(tagHoverTimer); tagHoverTimer = setTimeout(() => openTagPicker(kind, { anchor: button }), 160);
-  });
-  button.addEventListener('pointerleave', () => clearTimeout(tagHoverTimer));
   editorTags[side][kind] = button; $(`${side}-tags`).append(button);
 }
 const noteClip = createNoteClip({ onClick: () => setCardFace('back', { focusNote: true }) });
@@ -104,9 +101,11 @@ function activeDocument() { return state.documents.find(doc => doc.id === state.
 function activeWorkspace() { return activeDocument()?.workspace; }
 function option(value, text) { const result = document.createElement('option'); result.value = value; result.textContent = text; return result; }
 function show(id, visible = true) {
+  const returnFocus = !visible && $(id).contains(document.activeElement);
   $(id).hidden = !visible;
   const trigger = { 'settings-panel': 'open-settings', 'search-panel': 'open-search', 'workspace-menu': 'workspace-toggle' }[id];
   if (trigger) $(trigger).setAttribute('aria-expanded', String(visible));
+  if (trigger && returnFocus && !$(trigger).closest('[inert]')) $(trigger).focus({ preventScroll: true });
   queueRegions();
 }
 function closePopovers() { for (const id of ['workspace-menu', 'search-panel', 'settings-panel', 'name-prompt']) show(id, false); $('workspace-toggle').setAttribute('aria-expanded', 'false'); }
@@ -160,6 +159,7 @@ function applyState(next) {
   const level = next.settings?.effects ?? 'high';
   if (level !== effects) {
     effects = level; document.documentElement.dataset.effects = level; flock.setEffects(level); sceneMotion.refreshEffects();
+    if (level === 'off') finishCardAssembly();
   }
   if (initialFocus && workspace) { initialFocus = false; requestAnimationFrame(() => graph.latest()); }
   if (previous !== state.activeWorkspaceId) requestAnimationFrame(() => graph.latest());
@@ -202,24 +202,31 @@ function renderSelection() {
   show('selection-tools', selected.length > 0 && mode === 'graph' && !draft);
   $('archive-selected').hidden = !selected.length || selected.some(task => !!task.deletedAt || task.isArchived || !['Completed', 'Stopped'].includes(task.state));
   $('restore-selected').hidden = !selected.length || selected.some(task => !task.deletedAt && !task.isArchived);
+  const hasLinks = activeWorkspace()?.links.some(link => selection.includes(link.sourceId) || selection.includes(link.targetId));
+  buttonLabel('archive-selected', hasLinks ? 'Archive chain' : 'Archive');
+  buttonLabel('restore-selected', hasLinks ? 'Restore chain' : 'Restore');
 }
 
 function setMode(next, { retreat = false } = {}) {
+  if (next !== 'graph') graph.cancelInteraction();
   if (next !== 'ready') { wand = null; $('wand-anchor').hidden = true; }
   mode = next; document.body.dataset.mode = next;
   sceneMotion.setOpen(next === 'graph');
-  if (next === 'graph' || next === 'create' || next === 'idle') {
+  if (next !== 'create') finishCardAssembly();
+  if (next === 'graph' || next === 'idle') {
     flock.setMode(retreat ? 'disperse' : 'hidden');
   }
   renderSelection(); queueRegions();
 }
 
 async function hideManager() {
-  if (draft?.kind === 'create') { toast('Finish this task or press Esc to cancel.'); $('task-title').focus(); return; }
+  const revision = ++navigationRevision;
+  if (draft?.kind === 'create') { toast('Finish this task or press Esc to cancel.'); focusEditor(); return; }
   try { await flushEdit(); } catch { return; }
+  if (revision !== navigationRevision) return;
   closeComposer(false); closePopovers();
-  await host?.invoke('hide');
   setMode('idle');
+  await host?.invoke('hide');
 }
 
 function updateComposerCategories() {
@@ -229,6 +236,11 @@ function updateComposerCategories() {
 }
 
 function composerWorkspace() { return state.documents.find(doc => doc.id === $('task-workspace').value)?.workspace; }
+function defaultCategory(workspace) {
+  const latest = (workspace?.tasks ?? []).reduce((latest, task) =>
+    !task.deletedAt && (!latest || Date.parse(task.createdAt) >= Date.parse(latest.createdAt)) ? task : latest, null);
+  return latest?.category ?? '';
+}
 function populateComposerWorkspaces(selected) {
   $('task-workspace').replaceChildren(...state.documents.map(doc => option(doc.id, doc.workspace.name)));
   $('task-workspace').value = selected;
@@ -236,10 +248,12 @@ function populateComposerWorkspaces(selected) {
 function openTagPicker(kind, { focus = false, anchor } = {}) {
   if (!draft || draft.busy || transferRequest) return;
   const side = $('card-rotor').dataset.face;
+  if (draft.kind === 'create' && side !== 'back') return;
   tagPicker.open(kind, anchor ?? editorTags[side][kind], { focus });
 }
 async function choosePaperTag(kind, value) {
   if (!draft || draft.busy) return false;
+  const changedWorkspace = kind === 'workspace' && value !== $('task-workspace').value;
   if (kind === 'workspace' && draft.kind === 'edit' && value !== draft.workspaceId) return requestWorkspaceTransfer(value);
   if (kind === 'workspace' && value !== state.activeWorkspaceId) {
     const choosing = draft;
@@ -247,7 +261,13 @@ async function choosePaperTag(kind, value) {
     if (draft !== choosing) return false;
   }
   $(kind === 'workspace' ? 'task-workspace' : 'task-category').value = value;
-  if (kind === 'workspace') updateComposerCategories();
+  if (kind === 'workspace') {
+    if (draft.kind === 'create') {
+      draft.workspaceId = value;
+      if (changedWorkspace) $('task-category').value = defaultCategory(composerWorkspace());
+    }
+    updateComposerCategories();
+  }
   else { markEditDirty(); refreshDetails(); }
   return true;
 }
@@ -256,10 +276,22 @@ function markEditDirty() {
   draft.dirty = true; updateSaveIndicator(); clearTimeout(editTimer);
   editTimer = setTimeout(() => flushEdit().catch(() => {}), 650);
 }
+function focusEditor() {
+  if (!draft || returning) return;
+  const target = editorFocus?.isConnected && !editorFocus.disabled && !editorFocus.closest('[inert],[hidden]') && editorFocus.getClientRects().length
+    ? editorFocus : $('card-rotor').dataset.face === 'back' ? (draft.noteAttached ? $('task-notes') : $('attach-note')) : $('task-title');
+  target.focus({ preventScroll: true });
+}
+document.addEventListener('focusin', event => {
+  if (draft && !returning && $('composer').contains(event.target)) editorFocus = event.target;
+});
 function setCardFace(side, { focusNote = false } = {}) {
   side = side === 'back' ? 'back' : 'front';
+  if (side === 'back' && $('composer').classList.contains('is-assembling')) {
+    finishCardAssembly(); flock.setMode('hidden');
+  }
   const moveFocus = $('detail-card').contains(document.activeElement) || $('detail-back').contains(document.activeElement) || $('tag-picker').contains(document.activeElement);
-  clearTimeout(tagHoverTimer); tagPicker.close(false); composerSticker?.cancelGesture();
+  tagPicker.close(false); composerSticker?.cancelGesture();
   $('card-rotor').dataset.face = side;
   $('detail-card').inert = side !== 'front'; $('detail-card').setAttribute('aria-hidden', String(side !== 'front'));
   $('detail-back').inert = side !== 'back'; $('detail-back').setAttribute('aria-hidden', String(side !== 'back'));
@@ -325,6 +357,7 @@ async function confirmWorkspaceTransfer() {
 
 function refreshDetails() {
   if (!draft) return;
+  $('front-tags').inert = draft.kind === 'create';
   const document = state.documents.find(doc => doc.id === (draft.kind === 'edit' ? draft.workspaceId : $('task-workspace').value));
   const workspace = document?.workspace;
   const task = draft.kind === 'edit' ? workspace?.tasks.find(item => item.id === draft.taskId) : null;
@@ -349,7 +382,36 @@ function fitEditorText() {
   fitCardText($('detail-created'), { maxSize: width * 30 / 621.3463 });
 }
 
+function finishCardAssembly() {
+  $('composer').classList.remove('is-assembling');
+  $('flock').classList.remove('is-assembling');
+}
+
+function assembleCard() {
+  finishCardAssembly();
+  if (effects === 'off' || document.hidden || reducedMotion.matches) {
+    flock.setMode('hidden'); return;
+  }
+  $('composer').classList.add('is-assembling');
+  $('flock').classList.add('is-assembling');
+  // Retain the mouse flock's positions and velocities. Only its destinations
+  // change; the title is already a normal, immediately usable input.
+  flock.setMode('card', { bounds: $('card-perspective').getBoundingClientRect() });
+}
+
+reducedMotion.addEventListener('change', () => {
+  if (reducedMotion.matches && $('composer').classList.contains('is-assembling')) {
+    finishCardAssembly(); flock.setMode('hidden');
+  }
+});
+
 function revealComposer(sourceRect = null) {
+  finishCardAssembly();
+  editorFocus = null;
+  $('task-form').inert = false;
+  // A new editor can interrupt the previous card's return animation, before
+  // that submission's finally block has restored the shared form controls.
+  for (const control of $('task-form').querySelectorAll('input,textarea,select,button')) control.disabled = false;
   returning = null; $('composer').classList.remove('is-returning');
   cardEntrance?.cancel();
   show('composer');
@@ -389,13 +451,15 @@ async function changeDetailState(next) {
 }
 
 async function openCreator(options = {}) {
+  const revision = ++navigationRevision;
   if (transferRequest) { $('cancel-transfer').focus({ preventScroll: true }); return; }
-  if (draft?.kind === 'create') { setCardFace('front'); $('task-title').focus(); return; }
+  if (draft?.busy || carry?.active?.dropping) { focusEditor(); return; }
+  if (draft?.kind === 'create') { focusEditor(); return; }
   if (draft?.kind === 'edit') {
     const editing = draft;
     try { await flushEdit(); } catch { return; }
     if (transferRequest) { $('cancel-transfer').focus({ preventScroll: true }); return; }
-    if (draft !== editing) return;
+    if (draft !== editing || revision !== navigationRevision || editing.busy || carry?.active?.dropping) return;
   }
   if (!activeWorkspace()) {
     setMode('graph'); show('name-prompt'); $('workspace-input').focus();
@@ -403,23 +467,25 @@ async function openCreator(options = {}) {
     return;
   }
   graph.setLiftedTask(null); carry?.reset();
-  draft = { kind: 'create', workspaceId: state.activeWorkspaceId, dirty: false, noteAttached: false, state: 'NotStarted', ready: false };
+  draft = { kind: 'create', workspaceId: state.activeWorkspaceId, dirty: false, noteAttached: false, state: 'NotStarted' };
   closePopovers();
   $('composer').classList.remove('editing');
-  delete $('composer').dataset.ready; show('submit-task'); buttonLabel('submit-task', 'Done');
-  $('task-title').value = options.seed ?? ''; $('task-category').value = ''; $('task-description').value = ''; $('task-notes').value = ''; $('composer-error').textContent = '';
+  show('submit-task'); buttonLabel('submit-task', 'Done');
+  $('task-title').value = options.seed ?? ''; $('task-category').value = defaultCategory(activeWorkspace()); $('task-description').value = ''; $('task-notes').value = ''; $('composer-error').textContent = '';
   $('task-workspace').disabled = false;
   $('task-workspace').replaceChildren(...state.documents.map(doc => option(doc.id, doc.workspace.name)));
   $('task-workspace').value = draft.workspaceId; updateComposerCategories();
-  setMode('create'); revealComposer();
+  setMode('create'); revealComposer(); assembleCard();
   $('task-title').focus({ preventScroll: true }); $('task-title').setSelectionRange($('task-title').value.length, $('task-title').value.length);
   host?.invoke('summon', { mode: 'create', internal: true }).catch(error => toast(error.message, true));
   queueRegions();
 }
 
 async function openEditor(id, options = {}) {
-  if (draft?.busy) return;
+  if (draft?.busy || carry?.active?.dropping) return;
+  const revision = ++navigationRevision;
   try { await flushEdit(); } catch { return; }
+  if (revision !== navigationRevision || draft?.busy || carry?.active?.dropping) return;
   if (draft?.kind === 'create') { toast('Finish or cancel the task you are creating first.'); return; }
   const task = activeWorkspace()?.tasks.find(task => task.id === id);
   if (!task || task.deletedAt) return;
@@ -427,7 +493,7 @@ async function openEditor(id, options = {}) {
   graph.setLiftedTask(id);
   draft = { kind: 'edit', workspaceId: state.activeWorkspaceId, taskId: id, dirty: false, noteAttached: !!task.notes?.trim() };
   $('composer').style.left = ''; $('composer').style.top = '';
-  $('composer').classList.add('editing'); delete $('composer').dataset.ready; show('submit-task'); buttonLabel('submit-task', 'Done');
+  $('composer').classList.add('editing'); show('submit-task'); buttonLabel('submit-task', 'Done');
   $('task-title').value = task.title; $('task-category').value = task.category; $('task-description').value = task.description; $('task-notes').value = task.notes ?? ''; $('composer-error').textContent = '';
   populateComposerWorkspaces(draft.workspaceId); $('task-workspace').disabled = false;
   updateComposerCategories();
@@ -475,8 +541,15 @@ async function flushEdit() {
 
 function closeComposer(disperse = true, notifyHost = true) {
   if (draft?.busy) throw new Error('This task is being saved. Please wait.');
-  cancelWorkspaceTransfer(); clearTimeout(tagHoverTimer); tagPicker.close(false);
   const creating = draft?.kind === 'create';
+  finishCardAssembly();
+  // Assembly parks absorbed particles. Release them from the actual paper
+  // before hiding it, including when creation is cancelled after a long edit.
+  if (creating && disperse && effects !== 'off' && !reducedMotion.matches && !document.hidden)
+    flock.setMode('disperse', { bounds: $('card-perspective').getBoundingClientRect() });
+  navigationRevision++;
+  editorFocus = null;
+  cancelWorkspaceTransfer(); tagPicker.close(false);
   clearTimeout(editTimer); draft = null; show('composer', false); $('composer-error').textContent = '';
   composerSticker?.destroy(); composerSticker = null; cardEntrance?.cancel(); cardEntrance = null;
   returning = null;
@@ -490,22 +563,20 @@ function closeComposer(disperse = true, notifyHost = true) {
 
 async function submitTask(event) {
   event?.preventDefault();
-  if (!draft || $('submit-task').disabled) return;
+  if (!draft || draft.busy || returning || $('submit-task').disabled) return;
   if (draft.kind === 'edit') { try { await returnCard(); } catch (error) { $('composer-error').textContent = error.message; } return; }
-  if (!readyToCarry()) return;
-  $('card-grip').focus({ preventScroll: true });
+  await placeCard();
 }
 
-function readyToCarry() {
-  if (!draft || draft.busy || transferRequest) return false;
+function canSubmitCard() {
+  if (!draft || draft.busy || returning || transferRequest) return false;
   if (!taskFields().title) { $('composer-error').textContent = 'Give this task a title.'; $('task-title').focus(); return false; }
-  if (draft.kind === 'create') { draft.ready = true; $('composer').dataset.ready = 'true'; show('submit-task', false); }
   $('composer-error').textContent = '';
   return true;
 }
 
 async function placeCard(position = null) {
-  if (!readyToCarry()) return;
+  if (!canSubmitCard()) return;
   const submitting = draft;
   if (submitting.kind === 'edit') {
     try { await flushEdit(); } catch (error) { $('composer-error').textContent = error.message; return; }
@@ -518,17 +589,24 @@ async function placeCard(position = null) {
     if (submitting.kind === 'create') {
       const response = await run('createTask', { workspaceId, ...taskFields(), state: submitting.state, sourceIds: [], ...(position ? { column: position.column, row: position.row } : {}) }, { quiet: true });
       submitting.kind = 'edit'; submitting.taskId = response.result.taskId; submitting.workspaceId = workspaceId; submitting.dirty = false;
+      if (draft !== submitting) return;
       graph.setLiftedTask(submitting.taskId);
     } else if (position) await run('moveTask', { workspaceId, taskId: submitting.taskId, column: position.column, row: position.row }, { quiet: true });
+    if (draft !== submitting) return;
     requireSaved(workspaceId);
     if (workspaceId !== state.activeWorkspaceId) await run('activateWorkspace', { workspaceId });
+    if (draft !== submitting) return;
     submitting.busy = false;
     setMode('graph');
     host?.invoke('summon', { mode: 'graph', internal: true }).catch(error => toast(error.message, true));
     if (!position) { preparePlacementView(submitting); graph.latest(); }
     await returnCard();
-  } catch (error) { $('composer-error').textContent = error.message; }
-  finally { submitting.busy = false; for (const control of $('task-form').querySelectorAll('input,textarea,select,button')) control.disabled = false; if (draft === submitting) refreshDetails(); }
+  } catch (error) { if (draft === submitting) $('composer-error').textContent = error.message; }
+  finally {
+    submitting.busy = false;
+    if (!draft || draft === submitting) for (const control of $('task-form').querySelectorAll('input,textarea,select,button')) control.disabled = false;
+    if (draft === submitting) refreshDetails();
+  }
 }
 
 function requireSaved(workspaceId) {
@@ -547,29 +625,43 @@ function preparePlacementView(editing) {
 async function returnCard() {
   const editing = draft;
   if (!editing || editing.busy || returning?.taskId === editing.taskId) return;
+  const revision = navigationRevision;
   await flushEdit();
-  if (draft !== editing) return;
-  tagPicker.close(false); cardEntrance?.cancel();
+  if (draft !== editing || revision !== navigationRevision || returning?.taskId === editing.taskId) return;
+  tagPicker.close(false);
+  const card = $('card-perspective'), from = card.getBoundingClientRect();
+  cardEntrance?.cancel();
   if (mode !== 'graph') {
     preparePlacementView(editing); setMode('graph'); graph.latest();
     host?.invoke('summon', { mode: 'graph', internal: true }).catch(error => toast(error.message, true));
   }
-  const card = $('card-perspective'), from = card.getBoundingClientRect();
+  // Select while the graph card is still hidden, so its face and shadow have
+  // already reached the raised pose when the returning card hands over.
+  graph.select(editing.taskId);
   const target = graph.getCardRect(editing.taskId);
-  setCardFace('front');
-  delete document.body.dataset.detail;
   $('composer').classList.add('is-returning');
+  setCardFace('front');
+  // A confirmed card is on its way back to the graph. Release keyboard focus
+  // as well as pointer input, so late typing cannot become an unsaved edit.
+  $('task-form').inert = true;
+  $('manager').inert = false; $('graph-board').inert = false;
+  $('graph-board').focus({ preventScroll: true });
+  delete document.body.dataset.detail;
   if (target && effects !== 'off' && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
     card.style.transform = '';
-    const base = card.getBoundingClientRect();
-    const transform = rect => `translate(${rect.left - base.left}px,${rect.top - base.top}px) scale(${rect.width / base.width})`;
+    const transform = rect => {
+      // The card is the form's first, full-width child. Its untransformed
+      // origin follows responsive layout even while the animation is running.
+      const base = $('task-form').getBoundingClientRect();
+      return `translate(${rect.left - base.left}px,${rect.top - base.top}px) scale(${rect.width / base.width})`;
+    };
     cardEntrance = card.animate([{ transform: transform(from) }, { transform: transform(target) }], { duration: 420, easing: 'cubic-bezier(.22,.72,.2,1)', fill: 'forwards' });
     returning = { taskId: editing.taskId, from, transform, draft: editing };
     try { await cardEntrance.finished; } catch { /* A new user action may interrupt the return. */ }
   }
   if (returning?.draft === editing) returning = null;
   if (draft === editing) {
-    closeComposer(false); graph.select(editing.taskId);
+    closeComposer(false);
     (graph.cards.get(editing.taskId) ?? $('graph-board')).focus({ preventScroll: true });
   }
 }
@@ -592,9 +684,9 @@ function previewCarriedCard(drag) {
   else drag.placement = graph.previewPlacement(drag.left, drag.top, draft.kind === 'edit' ? draft.taskId : null);
 }
 carry = new CardCarry($('card-perspective'), $('card-grip'), {
-  cardWidth: graphGeometry.cardWidth,
+  cardWidth: () => graph.displayCardWidth,
   onPick: () => {
-    if (!readyToCarry()) return false;
+    if (draft?.kind !== 'edit' || !canSubmitCard()) return false;
     cardEntrance?.cancel(); cardEntrance = null; setCardFace('front');
     delete document.body.dataset.detail; $('manager').inert = false; $('graph-board').inert = false;
     preparePlacementView(draft); setMode('graph'); graph.latest();
@@ -605,8 +697,11 @@ carry = new CardCarry($('card-perspective'), $('card-grip'), {
   onDrop: async drag => {
     if (isTrashPoint(drag.point.x, drag.point.y)) {
       const editing = draft;
+      if (!editing) return;
       if (editing.kind === 'edit') {
-        await flushEdit(); editing.busy = true;
+        await flushEdit();
+        if (draft !== editing) return;
+        editing.busy = true;
         try {
           const task = state.documents.find(doc => doc.id === editing.workspaceId)?.workspace.tasks.find(task => task.id === editing.taskId);
           await run(task?.deletedAt ? 'saveWorkspace' : 'deleteTask', { workspaceId: editing.workspaceId, taskId: editing.taskId }, { quiet: true });
@@ -614,7 +709,7 @@ carry = new CardCarry($('card-perspective'), $('card-grip'), {
         }
         finally { editing.busy = false; }
       }
-      closeComposer(false); setMode('graph');
+      if (draft === editing) { closeComposer(false); setMode('graph'); }
     } else {
       previewCarriedCard(drag);
       if (drag.placement?.valid) await placeCard(drag.placement);
@@ -626,6 +721,13 @@ carry = new CardCarry($('card-perspective'), $('card-grip'), {
   },
   onError: error => { $('composer-error').textContent = error.message || String(error); }
 });
+document.addEventListener('wheel', event => {
+  if (!carry.active?.moved || carry.active.dropping) return;
+  // A captured grip lives outside the graph, but scrolling still manipulates
+  // the destination. Refresh before drop even if the mouse stays still.
+  if (!$('graph-board').contains(event.target)) graph.wheel(event);
+  carry.refresh();
+}, { passive: false });
 
 function focusTask(id) {
   const task = activeWorkspace()?.tasks.find(task => task.id === id); if (!task) return;
@@ -640,6 +742,7 @@ function focusTask(id) {
 
 function positionComposer() {
   // The card and metadata share the same responsive layout for both summons.
+  if ($('composer').classList.contains('is-assembling')) flock.setMode('card', { bounds: $('card-perspective').getBoundingClientRect() });
   queueRegions();
 }
 
@@ -710,8 +813,20 @@ bind('undo', async () => { await flushEdit(); if (draft?.kind === 'edit') closeC
 bind('redo', async () => { await flushEdit(); if (draft?.kind === 'edit') closeComposer(false); await run('redo'); });
 bind('add-column', () => run('insertColumn', { index: activeWorkspace()?.columns.length ?? 0 }));
 bind('fit-graph', () => graph.latest());
-bind('archive-selected', async () => { await flushEdit(); for (const taskId of [...selection]) await run('archiveTask', { taskId }); });
-bind('restore-selected', async () => { for (const taskId of [...selection]) { const task = activeWorkspace()?.tasks.find(task => task.id === taskId); await run(task?.deletedAt ? 'restoreTask' : 'unarchiveTask', { taskId }); } });
+bind('archive-selected', async () => {
+  await flushEdit();
+  for (const taskId of [...selection]) {
+    // The host archives a connected chain atomically; later selections in the
+    // same chain have already been handled and must not add redundant edits.
+    if (!activeWorkspace()?.tasks.find(task => task.id === taskId)?.isArchived) await run('archiveTask', { taskId });
+  }
+});
+bind('restore-selected', async () => {
+  for (const taskId of [...selection]) {
+    const task = activeWorkspace()?.tasks.find(task => task.id === taskId);
+    if (task?.deletedAt || task?.isArchived) await run(task.deletedAt ? 'restoreTask' : 'unarchiveTask', { taskId });
+  }
+});
 bind('hide-manager', hideManager);
 bind('scene-ring', hideManager);
 bind('flip-card', () => setCardFace($('card-rotor').dataset.face === 'back' ? 'front' : 'back'));
@@ -723,8 +838,7 @@ $('task-form').addEventListener('submit', submitTask);
 $('card-grip').addEventListener('keydown', async event => {
   if (!['Enter', ' '].includes(event.key)) return;
   event.preventDefault(); event.stopPropagation();
-  if (draft?.kind === 'create' && !draft.ready) { await submitTask(); return; }
-  await placeCard();
+  if (!event.repeat && !event.isComposing) await submitTask();
 });
 bind('task-trash', () => { if (!draft && mode === 'graph') { $('history-view').value = 'trash'; categoryView = false; syncViewButtons(); renderGraph(); graph.latest(); } });
 $('task-workspace').addEventListener('change', updateComposerCategories);
@@ -741,7 +855,7 @@ for (const id of ['task-title', 'task-category', 'task-description', 'task-notes
   markEditDirty();
 });
 $('task-title').addEventListener('beforeinput', event => { if (['insertLineBreak', 'insertParagraph'].includes(event.inputType)) event.preventDefault(); });
-$('task-title').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.ctrlKey && !event.isComposing) event.preventDefault(); });
+$('task-title').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) event.preventDefault(); });
 $('wand-anchor').addEventListener('pointerdown', event => {
   if (!wand || event.button !== 0) return;
   wand.held = true; wand.revision++;
@@ -764,6 +878,14 @@ $('wand-anchor').addEventListener('click', event => {
   openCreator({ point: { x: event.clientX, y: event.clientY } }).catch(error => toast(error.message, true));
 });
 $('setting-dismiss-speed').addEventListener('input', () => { $('dismiss-speed-value').value = Number($('setting-dismiss-speed').value).toFixed(1); });
+function syncGestureDifficulty() {
+  const input = $('setting-gesture-difficulty');
+  const value = Number(input.value);
+  const label = value < 34 ? 'Easy' : value < 67 ? 'Balanced' : 'Strict';
+  $('gesture-difficulty-value').value = `${value} · ${label}`;
+  input.setAttribute('aria-valuetext', `${value} of 100, ${label}`);
+}
+$('setting-gesture-difficulty').addEventListener('input', syncGestureDifficulty);
 function syncEffectKeys() { for (const button of document.querySelectorAll('button[data-effects]')) button.setAttribute('aria-pressed', String(button.dataset.effects === $('setting-effects').value)); }
 $('setting-effects').addEventListener('change', syncEffectKeys);
 for (const button of document.querySelectorAll('button[data-effects]')) button.addEventListener('click', () => { $('setting-effects').value = button.dataset.effects; syncEffectKeys(); });
@@ -777,6 +899,7 @@ for (const button of document.querySelectorAll('[data-settings-tab]')) button.ad
 bind('open-settings', () => {
   closePopovers(); settingsFolder = null;
   $('setting-effects').value = state.settings.effects ?? 'high'; $('setting-gesture').checked = state.settings.gestureEnabled !== false;
+  $('setting-gesture-difficulty').value = String(state.settings.gestureDifficulty ?? 40); syncGestureDifficulty();
   $('setting-roam').value = String(state.settings.idleRoamSeconds ?? 180);
   $('setting-dismiss-speed').value = String(state.settings.dismissSpeed ?? 1.5); $('dismiss-speed-value').value = Number($('setting-dismiss-speed').value).toFixed(1);
   $('setting-create-key').value = state.settings.createHotkey ?? 'Control+Alt+N'; $('setting-graph-key').value = state.settings.graphHotkey ?? 'Control+Alt+G';
@@ -785,13 +908,14 @@ bind('open-settings', () => {
 bind('choose-folder', async () => { const response = await run('chooseDataFolder'); settingsFolder = response?.result?.dataFolder ?? state.settings.dataFolder; $('data-folder').textContent = settingsFolder ?? ''; });
 bind('apply-settings', async () => {
   try {
-    await run('updateSettings', { effects: $('setting-effects').value, gestureEnabled: $('setting-gesture').checked, idleRoamSeconds: Number($('setting-roam').value), dismissSpeed: Number($('setting-dismiss-speed').value), createHotkey: $('setting-create-key').value, graphHotkey: $('setting-graph-key').value, ...(settingsFolder ? { dataFolder: settingsFolder } : {}) }, { quiet: true });
+    await run('updateSettings', { effects: $('setting-effects').value, gestureEnabled: $('setting-gesture').checked, gestureDifficulty: Number($('setting-gesture-difficulty').value), idleRoamSeconds: Number($('setting-roam').value), dismissSpeed: Number($('setting-dismiss-speed').value), createHotkey: $('setting-create-key').value, graphHotkey: $('setting-graph-key').value, ...(settingsFolder ? { dataFolder: settingsFolder } : {}) }, { quiet: true });
     show('settings-panel', false); toast('Settings saved.');
   } catch (error) { $('settings-error').textContent = error.message; }
 });
 async function quit() {
-  if (draft?.kind === 'create') { toast('Finish this task or press Esc to cancel.', true); $('task-title').focus(); return; }
-  try { await flushEdit(); await host.invoke('quit'); } catch (error) { toast(error.message, true, true); }
+  const revision = ++navigationRevision;
+  if (draft?.kind === 'create') { toast('Finish this task or press Esc to cancel.', true); focusEditor(); return; }
+  try { await flushEdit(); if (revision === navigationRevision) await host.invoke('quit'); } catch (error) { toast(error.message, true, true); }
 }
 bind('quit-app', quit);
 $('workspace-form').addEventListener('submit', async event => {
@@ -808,7 +932,9 @@ $('workspace-form').addEventListener('submit', async event => {
 for (const button of document.querySelectorAll('[data-close]')) button.addEventListener('click', () => show(button.dataset.close, false));
 
 document.addEventListener('keydown', async event => {
-  if (event.isComposing) return;
+  if (event.isComposing || event.keyCode === 229) return;
+  if (event.repeat && (event.key === 'Escape' || event.altKey && ['f', 'w'].includes(event.key.toLowerCase()))) { event.preventDefault(); return; }
+  if (draft && event.key === 'Enter' && (event.repeat || draft.busy || returning)) { event.preventDefault(); return; }
   const editing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement || event.target.isContentEditable;
   if (event.key === 'Escape') {
     event.preventDefault();
@@ -823,7 +949,7 @@ document.addEventListener('keydown', async event => {
   }
   if (mode === 'ready') return;
   if (transferRequest) {
-    if (event.key === 'Tab') { event.preventDefault(); ($(document.activeElement === $('cancel-transfer') ? 'confirm-transfer' : 'cancel-transfer')).focus(); }
+    if (event.key === 'Tab' && !event.altKey && !event.ctrlKey && !event.metaKey) { event.preventDefault(); ($(document.activeElement === $('cancel-transfer') ? 'confirm-transfer' : 'cancel-transfer')).focus(); }
     return;
   }
   const key = event.target.closest('button.key');
@@ -835,16 +961,19 @@ document.addEventListener('keydown', async event => {
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
     event.preventDefault(); tabs[next].focus(); tabs[next].click(); return;
   }
-  if (draft && event.ctrlKey && event.key === 'Enter') {
+  const frontField = draft && $('card-rotor').dataset.face === 'front' && [ $('task-title'), $('task-description') ].includes(event.target);
+  if (frontField && event.key === 'Enter' && !event.shiftKey && !event.altKey && (draft.kind === 'create' || event.ctrlKey)) {
     event.preventDefault();
-    if (event.target === $('task-title')) openTagPicker('category', { focus: true });
+    if (event.target === $('task-title')) $('task-description').focus({ preventScroll: true });
     else await submitTask();
-  } else if (draft && event.altKey && event.key.toLowerCase() === 'w') { event.preventDefault(); openTagPicker('workspace', { focus: true }); }
-  else if (draft && event.altKey && event.key.toLowerCase() === 'f') { event.preventDefault(); setCardFace($('card-rotor').dataset.face === 'back' ? 'front' : 'back'); }
-  else if (event.ctrlKey && event.key.toLowerCase() === 'f' && mode === 'graph') { event.preventDefault(); show('search-panel'); $('search-title').focus(); }
+  } else if (draft && event.ctrlKey && event.key === 'Enter') {
+    event.preventDefault(); await submitTask();
+  } else if (draft && !draft.busy && !returning && event.altKey && event.key.toLowerCase() === 'w') { event.preventDefault(); openTagPicker('workspace', { focus: true }); }
+  else if (draft && !draft.busy && !returning && event.altKey && event.key.toLowerCase() === 'f') { event.preventDefault(); setCardFace($('card-rotor').dataset.face === 'back' ? 'front' : 'back'); }
+  else if (event.ctrlKey && event.key.toLowerCase() === 'f' && mode === 'graph' && !draft) { event.preventDefault(); closePopovers(); show('search-panel'); $('search-title').focus(); }
   else if (!editing && event.ctrlKey && ['z', 'y'].includes(event.key.toLowerCase())) {
     event.preventDefault(); try { await flushEdit(); if (draft?.kind === 'edit') closeComposer(false); await run(event.key.toLowerCase() === 'y' || event.shiftKey ? 'redo' : 'undo'); } catch { /* Error surfaced. */ }
-  } else if (!editing && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === 'n') { event.preventDefault(); openCreator(); }
+  } else if (!editing && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === 'n') { event.preventDefault(); if (!event.repeat) openCreator(); }
 });
 function releaseKeys() { for (const key of document.querySelectorAll('.key.held')) key.classList.remove('held'); }
 document.addEventListener('keyup', releaseKeys);
@@ -900,26 +1029,35 @@ host?.onEvent(async event => {
   else if (event.type === 'prepareExit') await quit();
   else if (event.type === 'prepareHide') await hideManager();
   else if (event.type === 'hide') {
+    const revision = ++navigationRevision;
     if (draft?.kind === 'create') return;
     try {
-      await flushEdit(); closeComposer(event.disperse === true, false); closePopovers(); setMode('idle', { retreat: event.disperse === true });
+      await flushEdit();
+      if (revision !== navigationRevision) return;
+      closeComposer(event.disperse === true, false); closePopovers(); setMode('idle', { retreat: event.disperse === true });
     } catch { /* Retain editor. */ }
   } else if (event.type === 'summon') {
+    navigationRevision++;
     if (transferRequest) {
       $('cancel-transfer').focus({ preventScroll: true });
       if (event.mode !== 'graph') await host.invoke('summon', { mode: 'graph', internal: true });
       return;
     }
     if (draft?.kind === 'create') {
-      setCardFace('front');
-      $('task-title').focus();
+      focusEditor();
       if (event.mode !== 'create') await host.invoke('summon', { mode: 'create', internal: true });
     } else if (event.mode === 'create') await openCreator();
     else if (event.mode === 'ready') {
-      if (draft) { await host.invoke('summon', { mode: 'graph', internal: true }); $('task-title').focus(); }
+      if (draft) { await host.invoke('summon', { mode: 'graph', internal: true }); focusEditor(); }
       else await showWand(event);
-    } else if (draft) { $('card-grip').focus({ preventScroll: true }); }
-    else { setMode('graph'); graph.latest(); $('graph-board').focus({ preventScroll: true }); }
+    } else if (draft) { focusEditor(); }
+    else {
+      const resume = mode === 'graph', focused = document.activeElement;
+      setMode('graph');
+      if (!resume) graph.latest();
+      if (resume && focused !== document.body && focused?.isConnected && !focused.closest('[inert],[hidden]') && focused.getClientRects().length) focused.focus({ preventScroll: true });
+      else $('graph-board').focus({ preventScroll: true });
+    }
   } else if (event.type === 'cursorPoint' && mode === 'ready') followWand(event.point);
   else if (event.type === 'roaming' && mode === 'idle') flock.setMode(event.active ? 'roaming' : 'disperse');
   else if (event.type === 'disperse' && mode === 'ready') closeComposer(true, false);
@@ -929,7 +1067,9 @@ async function bootstrap() {
   show('retry-boot', false);
   try {
     await run('bootstrap', {}, { quiet: true });
-    show('boot-screen', false); setMode('graph');
+    // Loading data does not summon the window. Esc or a shortcut may already
+    // have changed its mode while the initial workspace response was pending.
+    show('boot-screen', false); setMode(mode);
     if (state.warnings?.length) toast(state.warnings.join('\n'), true, true);
   } catch (error) { $('boot-message').textContent = error.message; show('retry-boot'); }
 }

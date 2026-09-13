@@ -8,6 +8,11 @@ const COLUMN_STEP = 470;
 const ROW_STEP = 294;
 const TOP = 96;
 const PORT_OFFSET = 42;
+const CAMERA_LEFT = 66;
+const CAMERA_TOP = 24;
+const CONTENT_BOTTOM = 40;
+const FIVE_ROWS_HEIGHT = TOP + ROW_STEP * 4 + CARD_HEIGHT + CONTENT_BOTTOM;
+const ARCHIVE_LINK_REASON = 'Restore the archived chain before connecting it to active tasks.';
 const STATE_LABELS = { NotStarted: 'TODO', InProgress: 'IN PROGRESS', Completed: 'DONE', Stopped: 'STOPPED' };
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const edgeKey = (source, target) => `${source}:${target}`;
@@ -18,6 +23,8 @@ export const graphGeometry = Object.freeze({ cardWidth: CARD_WIDTH, cardHeight: 
 /** Strictly increasing logical columns make cycles impossible without graph traversal. */
 export function validateConnection(source, target, links = [], replacedLink = null) {
   if (!source || !target || source.deletedAt || target.deletedAt || source.id === target.id || source.column >= target.column) return false;
+  const unchanged = replacedLink?.sourceId === source.id && replacedLink?.targetId === target.id;
+  if (!unchanged && !!source.isArchived !== !!target.isArchived) return false;
   return !links.some(link => link.sourceId === source.id && link.targetId === target.id &&
     !(replacedLink && link.sourceId === replacedLink.sourceId && link.targetId === replacedLink.targetId));
 }
@@ -30,6 +37,7 @@ export function planConnection(tasks, links, sourceId, targetId) {
   if (!source || !target || source.deletedAt || target.deletedAt) return reject('Connect tasks that have not been deleted.');
   if (sourceId === targetId) return reject('A task cannot connect to itself.');
   if (links.some(link => link.sourceId === sourceId && link.targetId === targetId)) return reject('These tasks are already connected.');
+  if (!!source.isArchived !== !!target.isArchived) return reject(ARCHIVE_LINK_REASON);
   if (links.length >= 8000) return reject('The connection limit has been reached.');
   if (source.column < target.column) return { valid: true, column: target.column, row: target.row, movedCount: 0 };
   const outgoing = new Map();
@@ -144,11 +152,12 @@ export class TaskGraph {
     this.cards = new Map();
     this.stickers = new Map();
     this.tasks = new Map();
+    this.contextIds = new Set();
     this.positions = new Map();
     this.edges = new Map();
     this.incident = new Map();
     this.animations = new Map();
-    this.camera = { x: 66, y: 24, scale: 1 };
+    this.camera = { x: CAMERA_LEFT, y: CAMERA_TOP, scale: 1 };
     this.frame = 0;
     this.pendingPointer = null;
     this.interaction = null;
@@ -156,7 +165,7 @@ export class TaskGraph {
     this.container.classList.add('dg-graph');
     this.container.tabIndex = 0;
     this.container.setAttribute('role', 'region');
-    this.container.setAttribute('aria-label', 'Task graph. Select a card to reveal its connection points. Drag cards to move them or to the bin. Shift and wheel scroll time slices; wheel scrolls overflowing rows.');
+    this.container.setAttribute('aria-label', 'Task graph. Select a card to reveal its connection points. Drag cards to move them or to the bin. Hold the middle mouse button and drag to pan. Ctrl and wheel zoom between full size and five rows. Shift and wheel scroll time slices; wheel scrolls overflowing rows.');
     this.stage = element('div', 'dg-graph-stage');
     this.columnsLayer = element('div', 'dg-columns');
     this.edgeLayer = svgElement('svg', { class: 'dg-edges', 'aria-label': 'Task connections' });
@@ -192,6 +201,10 @@ export class TaskGraph {
     this.container.addEventListener('pointerup', (event) => this.pointerUp(event), events);
     this.container.addEventListener('pointercancel', () => this.cancelInteraction(), events);
     this.container.addEventListener('lostpointercapture', () => { if (this.interaction) this.cancelInteraction(); }, events);
+    this.container.addEventListener('mousedown', event => { if (event.button === 1) event.preventDefault(); }, events);
+    this.container.addEventListener('auxclick', event => { if (event.button === 1) event.preventDefault(); }, events);
+    window.addEventListener('blur', () => this.cancelInteraction(), events);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) this.cancelInteraction(); }, events);
     this.container.addEventListener('wheel', (event) => this.wheel(event), { ...events, passive: false });
     this.container.addEventListener('keydown', (event) => this.keyDown(event), events);
     this.container.addEventListener('dblclick', (event) => this.doubleClick(event), events);
@@ -205,6 +218,12 @@ export class TaskGraph {
   }
 
   get selectedIds() { return [...this.selection]; }
+
+  get minScale() {
+    return Math.min(1, Math.max(1, this.container.clientHeight - CAMERA_TOP) / FIVE_ROWS_HEIGHT);
+  }
+
+  get displayCardWidth() { return CARD_WIDTH * this.camera.scale; }
 
   fitTitles() {
     for (const card of this.cards.values()) fitCardText(card.querySelector('.dg-card-title'));
@@ -225,21 +244,22 @@ export class TaskGraph {
     }
   }
 
-  /** Client coordinates describe the proposed top-left of a normal-size card. */
+  /** Client coordinates describe the proposed top-left at the current graph scale. */
   previewPlacement(clientX, clientY, taskId = null) {
     if (!this.workspace || this.options.categoryView || !Number.isFinite(clientX) || !Number.isFinite(clientY)) return { valid: false };
     const bounds = this.container.getBoundingClientRect();
     const position = this.worldPoint({ clientX, clientY });
     const { column, row } = snapPosition(position, this.workspace.columns.length, this.tasks.values(), taskId);
-    const inside = clientX + CARD_WIDTH / 2 >= bounds.left && clientX + CARD_WIDTH / 2 <= bounds.right &&
-      clientY + CARD_HEIGHT / 2 >= bounds.top && clientY + CARD_HEIGHT / 2 <= bounds.bottom;
+    const scale = this.camera.scale;
+    const inside = clientX + CARD_WIDTH * scale / 2 >= bounds.left && clientX + CARD_WIDTH * scale / 2 <= bounds.right &&
+      clientY + CARD_HEIGHT * scale / 2 >= bounds.top && clientY + CARD_HEIGHT * scale / 2 <= bounds.bottom;
     const valid = inside && (taskId === null || this.validMove(taskId, column));
     const append = column === this.workspace.columns.length;
     this.showPlacement({ column, row, valid, append });
     return { column, row, valid, append, rect: {
-      left: bounds.left + this.camera.x + column * COLUMN_STEP,
-      top: bounds.top + this.camera.y + TOP + row * ROW_STEP,
-      width: CARD_WIDTH, height: CARD_HEIGHT
+      left: bounds.left + this.camera.x + column * COLUMN_STEP * scale,
+      top: bounds.top + this.camera.y + (TOP + row * ROW_STEP) * scale,
+      width: CARD_WIDTH * scale, height: CARD_HEIGHT * scale
     } };
   }
 
@@ -261,7 +281,7 @@ export class TaskGraph {
     const changedWorkspace = this.workspace?.id !== workspace?.id;
     const changedView = Boolean(this.options.categoryView) !== Boolean(options.categoryView);
     if (changedWorkspace) {
-      this.camera = { x: 66, y: 24, scale: 1 };
+      this.camera = { x: CAMERA_LEFT, y: CAMERA_TOP, scale: this.camera.scale };
       this.selection.clear();
       for (const sticker of this.stickers.values()) sticker.destroy();
       this.stickers.clear();
@@ -273,7 +293,7 @@ export class TaskGraph {
     this.workspace = workspace;
     this.options = options;
     this.tasks = new Map((workspace?.tasks || []).slice(0, 2000).map(task => [task.id, task]));
-    this.visibleTasks = [...this.tasks.values()].filter(task => this.isVisible(task));
+    this.visibleTasks = this.collectVisibleTasks();
     const visibleIds = new Set(this.visibleTasks.map(task => task.id));
     const previousSelectionSize = this.selection.size;
     this.selection = new Set([...this.selection].filter(id => visibleIds.has(id)));
@@ -302,6 +322,34 @@ export class TaskGraph {
     if (task.deletedAt) return false;
     if (history === 'archived' || history === 'archive') return task.isArchived;
     return history === 'all' || history === true || !task.isArchived;
+  }
+
+  collectVisibleTasks() {
+    const primary = [...this.tasks.values()].filter(task => this.isVisible(task));
+    const visibleIds = new Set(primary.map(task => task.id));
+    this.contextIds.clear();
+    if (['trash', 'deleted', 'all', true].includes(this.options.history)) return primary;
+    // Older workspaces can have partially archived chains. Keep the whole
+    // connected component on screen so every ordering constraint has a line.
+    const neighbors = new Map();
+    for (const { sourceId, targetId } of (this.workspace?.links || []).slice(0, 8000)) {
+      const source = this.tasks.get(sourceId), target = this.tasks.get(targetId);
+      if (!source || !target || source.deletedAt || target.deletedAt) continue;
+      if (!neighbors.has(sourceId)) neighbors.set(sourceId, []);
+      if (!neighbors.has(targetId)) neighbors.set(targetId, []);
+      neighbors.get(sourceId).push(targetId);
+      neighbors.get(targetId).push(sourceId);
+    }
+    const pending = [...visibleIds];
+    while (pending.length) {
+      for (const id of neighbors.get(pending.pop()) || []) {
+        if (visibleIds.has(id)) continue;
+        visibleIds.add(id);
+        this.contextIds.add(id);
+        pending.push(id);
+      }
+    }
+    return [...this.tasks.values()].filter(task => visibleIds.has(task.id));
   }
 
   matches(task) {
@@ -345,8 +393,8 @@ export class TaskGraph {
       lanes = this.workspace.columns.map((label, index) => ({ label, tasks: this.visibleTasks.filter(task => task.column === index) }));
       for (const task of this.visibleTasks) this.positions.set(task.id, pointFor(task));
     }
-    this.contentHeight = Math.max(TOP + CARD_HEIGHT, ...[...this.positions.values()].map(position => position.y + CARD_HEIGHT)) + 40;
-    this.worldHeight = Math.max(this.container.clientHeight, this.contentHeight);
+    this.contentHeight = Math.max(TOP + CARD_HEIGHT, ...[...this.positions.values()].map(position => position.y + CARD_HEIGHT)) + CONTENT_BOTTOM;
+    this.worldHeight = Math.max(this.container.clientHeight / this.camera.scale, this.contentHeight);
     this.worldWidth = (Math.max(1, lanes.length) - 1 + (!this.options.categoryView && lanes.length < 256 ? 1 : 0)) * COLUMN_STEP + CARD_WIDTH;
     lanes.forEach((lane, index) => {
       const column = element('section', 'dg-column');
@@ -404,7 +452,7 @@ export class TaskGraph {
       }));
       const noteClip = createNoteClip({ onClick: () => this.callbacks.onEdit?.(task.id, { notes: true }) });
       surface.append(tags, stickerSlot, ribbon, element('p', 'dg-card-description'), noteClip);
-      card.append(surface, element('div', 'dg-card-actions'));
+      card.append(surface, element('div', 'dg-card-actions'), element('span', 'dg-history-context'));
       this.cardsLayer.append(card);
       this.cards.set(task.id, card);
       this.stickers.set(task.id, new StickerController(stickerSlot, {
@@ -414,9 +462,15 @@ export class TaskGraph {
       }));
     }
     card.dataset.state = task.state;
-    card.setAttribute('aria-label', `${task.title}, ${STATE_LABELS[task.state] || task.state}, column ${task.column + 1}`);
+    const context = this.contextIds.has(task.id);
+    card.setAttribute('aria-label', `${task.title}, ${STATE_LABELS[task.state] || task.state}, column ${task.column + 1}${context ? `, ${task.isArchived ? 'archived' : 'active'} task shown to preserve connection context` : ''}`);
     card.classList.toggle('is-dimmed', !this.matches(task));
     card.classList.toggle('is-archived', !!task.isArchived);
+    card.classList.toggle('is-history-context', context);
+    const contextLabel = card.querySelector('.dg-history-context');
+    contextLabel.hidden = !context;
+    contextLabel.textContent = task.isArchived ? 'ARCHIVED · LINKED' : 'ACTIVE · LINKED';
+    contextLabel.title = 'This card stays visible because it is connected to this view.';
     card.classList.toggle('is-deleted', !!task.deletedAt);
     card.classList.toggle('is-lifted', task.id === this.liftedTaskId);
     card.inert = task.id === this.liftedTaskId;
@@ -450,7 +504,7 @@ export class TaskGraph {
     for (const port of card.querySelectorAll('.dg-port')) port.remove();
     if (!task.deletedAt && !this.options.categoryView) {
       for (const side of ['in', 'out']) {
-        const port = button(`dg-port dg-port-${side}`, side === 'in' ? 'Drag to connect a source task' : 'Drag to connect a follow-up task', '');
+        const port = button(`dg-port dg-port-${side}`, side === 'in' ? 'Drag to connect an incoming task' : 'Drag to connect an outgoing task', '');
         port.dataset.port = side;
         port.dataset.taskId = task.id;
         port.addEventListener('click', event => { if (event.detail === 0) this.keyboardPort(task.id, side); });
@@ -553,7 +607,16 @@ export class TaskGraph {
   }
 
   pointerDown(event) {
-    if (!this.workspace || event.button !== 0 || this.interaction) return;
+    if (event.button === 1) event.preventDefault();
+    if (!this.workspace || this.interaction) return;
+    if (event.button === 1) {
+      this.interaction = { type: 'pan', pointerId: event.pointerId, startClient: { x: event.clientX, y: event.clientY }, lastPointer: { clientX: event.clientX, clientY: event.clientY }, moved: false };
+      this.container.focus({ preventScroll: true });
+      this.container.classList.add('is-panning');
+      this.capture(event);
+      return;
+    }
+    if (event.button !== 0) return;
     const target = event.target;
     const point = this.worldPoint(event);
     const endpoint = target.closest('[data-endpoint]');
@@ -607,6 +670,8 @@ export class TaskGraph {
 
   pointerMove(event) {
     if (!this.interaction || event.pointerId !== this.interaction.pointerId) return;
+    const heldButton = this.interaction.type === 'pan' ? 4 : 1;
+    if (!(event.buttons & heldButton)) { this.cancelInteraction(); return; }
     this.pendingPointer = { clientX: event.clientX, clientY: event.clientY };
     this.requestFrame();
   }
@@ -614,6 +679,15 @@ export class TaskGraph {
   processPointer(event) {
     const interaction = this.interaction;
     if (!interaction) return;
+    if (interaction.type === 'pan') {
+      const previous = interaction.lastPointer;
+      interaction.lastPointer = { clientX: event.clientX, clientY: event.clientY };
+      interaction.moved ||= Math.hypot(event.clientX - interaction.startClient.x, event.clientY - interaction.startClient.y) > 4;
+      this.camera.x += event.clientX - previous.clientX;
+      if (this.verticalOverflow) this.camera.y += event.clientY - previous.clientY;
+      this.applyCamera();
+      return;
+    }
     interaction.lastPointer = { clientX: event.clientX, clientY: event.clientY };
     const point = this.worldPoint(event);
     interaction.moved ||= Math.hypot(point.x - interaction.start.x, point.y - interaction.start.y) * this.camera.scale > 4;
@@ -654,7 +728,7 @@ export class TaskGraph {
       const drop = interaction.drop;
       const target = drop?.valid ? { x: drop.column * COLUMN_STEP, y: TOP + drop.row * ROW_STEP } : pointFor(this.tasks.get(interaction.id));
       this.animatePosition(interaction.id, this.positions.get(interaction.id), target);
-      if (!drop?.valid) this.toast('Follow-up tasks must stay to the right of every source.');
+      if (!drop?.valid) this.toast('Connections must run from left to right. Disconnect the blocking link to move this card here.');
       else {
         const task = this.tasks.get(interaction.id);
         if (drop.column !== task.column || drop.row !== task.row) this.commit('moveTask', { taskId: interaction.id, column: drop.column, row: drop.row }, () => this.animatePosition(interaction.id, this.positions.get(interaction.id), pointFor(task)));
@@ -669,7 +743,7 @@ export class TaskGraph {
       } else if (interaction.edge && !document.elementFromPoint(event.clientX, event.clientY)?.closest('.dg-task-card')) {
         this.commit('removeLink', { sourceId: interaction.edge.sourceId, targetId: interaction.edge.targetId });
         this.toast('Connection removed. Press Ctrl + Z to undo.');
-      } else this.toast(interaction.targetPlan?.reason || 'Drag to another card. Follow-up tasks move to the right of their sources.');
+      } else this.toast(interaction.targetPlan?.reason || 'Drag to another card. Connecting can move linked cards to keep each arrow pointing right.');
     }
   }
 
@@ -727,7 +801,7 @@ export class TaskGraph {
     const source = this.tasks.get(sourceId);
     const target = this.tasks.get(targetId);
     interaction.targetPlan = interaction.edge
-      ? { valid: validateConnection(source, target, this.workspace.links, interaction.edge), reason: 'Reconnecting must keep the follow-up task to the right of its source.', column: target?.column, row: target?.row, movedCount: 0 }
+      ? { valid: validateConnection(source, target, this.workspace.links, interaction.edge), reason: !!source?.isArchived !== !!target?.isArchived ? ARCHIVE_LINK_REASON : 'Reconnecting must keep the arrow pointing from left to right.', column: target?.column, row: target?.row, movedCount: 0 }
       : planConnection(this.tasks, this.workspace.links, sourceId, targetId);
     return interaction.targetPlan.valid ? candidate : null;
   }
@@ -762,7 +836,7 @@ export class TaskGraph {
     if (plan) {
       this.linkHint.classList.toggle('is-invalid', !plan.valid);
       this.linkHint.textContent = !plan.valid ? plan.reason : plan.movedCount
-        ? `Connect and move to column ${plan.column + 1}${plan.movedCount > 1 ? ` · ${plan.movedCount - 1} follow-up tasks also move` : ''}`
+        ? `Connect and move to column ${plan.column + 1}${plan.movedCount > 1 ? ` · ${plan.movedCount - 1} linked cards also move` : ''}`
         : interaction.edge ? 'Release to reconnect' : 'Release to connect';
       this.linkHint.style.left = `${clamp(point.x * this.camera.scale + this.camera.x + 20, 12, Math.max(12, this.container.clientWidth - 320))}px`;
       this.linkHint.style.top = `${clamp(point.y * this.camera.scale + this.camera.y + 24, 12, Math.max(12, this.container.clientHeight - 70))}px`;
@@ -800,7 +874,7 @@ export class TaskGraph {
 
   panAtEdge(time) {
     const interaction = this.interaction;
-    if (!interaction?.moved || interaction.trash || !interaction.lastPointer) return false;
+    if (!interaction?.moved || interaction.type === 'pan' || interaction.trash || !interaction.lastPointer) return false;
     const rect = this.container.getBoundingClientRect();
     const pointer = interaction.lastPointer;
     const elapsed = clamp((time - interaction.lastPanTime) / 1000, 0, .04);
@@ -815,8 +889,8 @@ export class TaskGraph {
     const vy = this.verticalOverflow ? speed(pointer.clientY - rect.top, rect.height) : 0;
     if (!vx && !vy) return false;
     const { minX, minY } = this.cameraBounds();
-    const x = clamp(this.camera.x - vx * elapsed, minX, 66);
-    const y = clamp(this.camera.y - vy * elapsed, minY, 24);
+    const x = clamp(this.camera.x - vx * elapsed, minX, CAMERA_LEFT);
+    const y = clamp(this.camera.y - vy * elapsed, minY, CAMERA_TOP);
     if (Math.abs(x - this.camera.x) + Math.abs(y - this.camera.y) < .01) return false;
     this.camera.x = x;
     this.camera.y = y;
@@ -859,22 +933,27 @@ export class TaskGraph {
   }
 
   applyCamera() {
+    this.camera.scale = clamp(this.camera.scale, this.minScale, 1);
     const { minX, minY } = this.cameraBounds();
-    this.camera.scale = 1;
-    this.camera.x = clamp(this.camera.x, minX, 66);
-    this.camera.y = clamp(this.camera.y, minY, 24);
-    this.stage.style.transform = `translate3d(${this.camera.x}px, ${this.camera.y}px, 0)`;
-    this.container.style.setProperty('--graph-scale', 1);
+    this.camera.x = clamp(this.camera.x, minX, CAMERA_LEFT);
+    this.camera.y = clamp(this.camera.y, minY, CAMERA_TOP);
+    this.stage.style.transform = `translate3d(${this.camera.x}px, ${this.camera.y}px, 0) scale(${this.camera.scale})`;
+    this.container.style.setProperty('--graph-scale', this.camera.scale);
+    const worldHeight = Math.max(this.container.clientHeight / this.camera.scale, this.contentHeight || 0);
+    if (Math.abs(worldHeight - this.worldHeight) > .5) {
+      this.worldHeight = worldHeight;
+      for (const column of this.columnsLayer.children) column.style.height = `${worldHeight}px`;
+    }
   }
 
   get verticalOverflow() {
-    return (this.contentHeight || 0) + 24 > this.container.clientHeight;
+    return (this.contentHeight || 0) * this.camera.scale + CAMERA_TOP > this.container.clientHeight + .5;
   }
 
   cameraBounds() {
     return {
-      minX: Math.min(66, this.container.clientWidth - (this.worldWidth || CARD_WIDTH) - 66),
-      minY: this.verticalOverflow ? this.container.clientHeight - this.contentHeight : 24
+      minX: Math.min(CAMERA_LEFT, this.container.clientWidth - (this.worldWidth || CARD_WIDTH) * this.camera.scale - CAMERA_LEFT),
+      minY: this.verticalOverflow ? this.container.clientHeight - this.contentHeight * this.camera.scale : CAMERA_TOP
     };
   }
 
@@ -882,18 +961,36 @@ export class TaskGraph {
     const lastColumn = this.options.categoryView
       ? Math.max(0, ...[...this.positions.values()].map(position => position.x / COLUMN_STEP))
       : Math.max(0, (this.workspace?.columns.length || 1) - 1);
-    this.camera = { x: this.container.clientWidth / 2 - lastColumn * COLUMN_STEP - CARD_WIDTH / 2, y: 24, scale: 1 };
+    const scale = clamp(this.camera.scale, this.minScale, 1);
+    this.camera = { x: this.container.clientWidth / 2 - (lastColumn * COLUMN_STEP + CARD_WIDTH / 2) * scale, y: CAMERA_TOP, scale };
     this.applyCamera();
   }
 
-  // Retained as the toolbar's reset command; physical cards always keep scale 1.
+  // The toolbar returns to the latest time slice without changing the chosen size.
   fit() { this.latest(); }
+
+  zoom(scale, clientX, clientY) {
+    if (!Number.isFinite(scale)) return;
+    const bounds = this.container.getBoundingClientRect();
+    const x = Number.isFinite(clientX) ? clientX - bounds.left : bounds.width / 2;
+    const y = Number.isFinite(clientY) ? clientY - bounds.top : bounds.height / 2;
+    const worldX = (x - this.camera.x) / this.camera.scale;
+    const worldY = (y - this.camera.y) / this.camera.scale;
+    this.camera.scale = clamp(scale, this.minScale, 1);
+    this.camera.x = x - worldX * this.camera.scale;
+    this.camera.y = y - worldY * this.camera.scale;
+    this.applyCamera();
+    if (this.interaction?.lastPointer) this.processPointer(this.interaction.lastPointer);
+  }
 
   wheel(event) {
     if (event.target.closest('input, textarea, select')) return;
     event.preventDefault();
-    if (event.ctrlKey || event.metaKey) return;
     const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? this.container.clientHeight : 1;
+    if (event.ctrlKey || event.metaKey) {
+      this.zoom(this.camera.scale * Math.exp(-clamp(event.deltaY * unit, -1200, 1200) * .0015), event.clientX, event.clientY);
+      return;
+    }
     if (event.shiftKey) this.camera.x -= clamp((event.deltaY || event.deltaX) * unit, -1200, 1200);
     else if (this.verticalOverflow) this.camera.y -= clamp(event.deltaY * unit, -1200, 1200);
     this.applyCamera();
@@ -916,6 +1013,7 @@ export class TaskGraph {
 
   keyDown(event) {
     if (event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (event.repeat && ['Enter', 'F2'].includes(event.key)) { event.preventDefault(); return; }
     if (event.key === 'Escape' && (this.interaction || this.keyboardLink)) {
       event.preventDefault();
       event.stopPropagation();
@@ -941,7 +1039,11 @@ export class TaskGraph {
       return;
     }
     if (event.key === '0' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); this.fit(); return; }
-    if (event.key === '+' || event.key === '=' || event.key === '-') { event.preventDefault(); return; }
+    if (event.key === '+' || event.key === '=' || event.key === '-') {
+      event.preventDefault();
+      this.zoom(this.camera.scale * (event.key === '-' ? 1 / 1.15 : 1.15));
+      return;
+    }
     const directions = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
     const direction = directions[event.key];
     if (!direction) return;
@@ -957,7 +1059,7 @@ export class TaskGraph {
       const column = clamp(task.column + direction[0], 0, Math.min(255, this.workspace.columns.length));
       const row = this.freeRow(column, clamp(task.row + direction[1], 0, 4095), task.id);
       if (this.validMove(task.id, column)) this.commit('moveTask', { taskId: task.id, column, row });
-      else this.toast('This position would violate the task order.');
+      else this.toast('Connections must run from left to right. Disconnect the blocking link to move this card here.');
     }
   }
 
@@ -994,7 +1096,7 @@ export class TaskGraph {
     }
     this.keyboardLink = null;
     this.container.classList.remove('is-linking');
-    if (plan.movedCount) this.toast(`Connecting moves this task to column ${plan.column + 1}${plan.movedCount > 1 ? ' and shifts its affected follow-up tasks' : ''}.`);
+    if (plan.movedCount) this.toast(`Connecting moves this task to column ${plan.column + 1}${plan.movedCount > 1 ? ' and shifts the cards linked after it' : ''}.`);
     this.commit('connectTask', pair);
   }
 

@@ -8,7 +8,7 @@ export const paperAssets = Object.freeze({
   workspaceTag: asset('tag-workspace'), categoryTag: asset('tag-category')
 });
 
-const PAPER_COLORS = Object.freeze(['#c1c5a6', '#c9b8a4', '#b1c3bf', '#c2b8c8', '#ccbea2', '#b7c0a8', '#c9b4ad', '#b5becb']);
+const PAPER_COLORS = Object.freeze(['#f0bd78', '#f29b91', '#b9d879', '#80d5b2', '#7fcfe0', '#9cbaf0', '#c5a0e4', '#eaa1c6']);
 
 let textMeasure;
 
@@ -18,12 +18,13 @@ export function fitCardText(node, { maxSize, minSize = .5, width, height, text }
   if (!node?.isConnected) return 0;
   const style = getComputedStyle(node);
   const surface = node.closest('.dg-card-surface');
-  const maximum = maxSize ?? (surface?.clientWidth ? surface.clientWidth * 95 / 621.3463 : parseFloat(style.fontSize));
+  let value = String(text ?? (node.value !== undefined ? node.value || node.placeholder : node.textContent) ?? '').replace(/[\r\n]+/g, ' ');
+  const titleSize = /\p{Script=Han}/u.test(value) ? 88 : 95;
+  const maximum = maxSize ?? (surface?.clientWidth ? surface.clientWidth * titleSize / 621.3463 : parseFloat(style.fontSize));
   const availableWidth = width ?? node.clientWidth - parseFloat(style.paddingLeft || 0) - parseFloat(style.paddingRight || 0);
   const availableHeight = height ?? (node.parentElement?.clientHeight || node.clientHeight);
   if (!(maximum > 0) || !(availableWidth > 0) || !(availableHeight > 0)) return 0;
   textMeasure ||= document.createElement('canvas').getContext('2d');
-  let value = String(text ?? (node.value !== undefined ? node.value || node.placeholder : node.textContent) ?? '').replace(/[\r\n]+/g, ' ');
   if (style.textTransform === 'uppercase') value = value.toLocaleUpperCase();
   else if (style.textTransform === 'lowercase') value = value.toLocaleLowerCase();
   const oldSize = parseFloat(style.fontSize) || maximum;

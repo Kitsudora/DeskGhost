@@ -9,7 +9,7 @@
 }
 
 /* The complete workspace hangs from one ring. Its solid skin moves with every
-   control; only the hook and the free-flying flock belong to the desktop. */
+   control. The independent hook retracts beyond the desktop's top edge. */
 #desk-scene.scene-shell {
   position: fixed;
   inset: var(--scene-top) var(--scene-side) var(--scene-bottom);
@@ -82,7 +82,8 @@
 
 #scene-ring {
   position: absolute;
-  z-index: 70;
+  /* The attachment tucks behind the top bar, above the leather backing. */
+  z-index: 5;
   left: 50%;
   /* The moving artwork begins at source y=158.739; the fixed hook starts at 0. */
   top: calc(var(--scene-hook-top) + var(--scene-hardware-width) * .6839398 - var(--scene-top));
@@ -102,11 +103,12 @@
 
 #scene-hook, #scene-hook-front {
   position: fixed;
-  top: var(--scene-hook-top);
+  /* Extend the metal stem upward by 58 source units; the hook head stays put. */
+  top: calc(var(--scene-hook-top) - var(--scene-hardware-width) * .2498977);
   left: 50%;
   width: var(--scene-hardware-width);
-  height: calc(var(--scene-hardware-width) * 1.9880394);
-  transform: translateX(-50%);
+  height: calc(var(--scene-hardware-width) * 2.2379371);
+  transform: translate(-50%, calc(-100% - var(--scene-hook-top) - 12px));
   pointer-events: none;
   visibility: hidden;
   background: center / 100% 100% no-repeat;
@@ -117,10 +119,13 @@
 #scene-hook[data-visible="true"], #scene-hook-front[data-visible="true"] { visibility: visible; }
 
 /* Existing panes now use the leather's coordinate system. */
-#desk-scene #manager { position: absolute; inset: 0; display: block; border-radius: inherit; }
+#desk-scene #manager { position: absolute; inset: 0; display: block; border-radius: inherit; pointer-events: none; }
+#desk-scene #manager > [data-interactive] { pointer-events: auto; }
 #desk-scene .workspace-bar { top: 24px; left: var(--scene-inset); right: var(--scene-inset); }
 #desk-scene .work-dock { top: 115px; left: var(--scene-inset); right: var(--scene-inset); }
-#desk-scene #graph-board { top: var(--board-top, 190px); left: var(--scene-inset); right: var(--scene-inset); bottom: 78px; min-height: 0; }
+/* Cards continue behind the small tool buttons; no full-width footer clips
+   the graph early and makes occupied space look empty. */
+#desk-scene #graph-board { top: var(--board-top, 190px); left: var(--scene-inset); right: var(--scene-inset); bottom: var(--scene-inset); min-height: 0; }
 #desk-scene .graph-controls { right: var(--scene-inset); bottom: 20px; }
 #desk-scene .selection-tools { left: var(--scene-inset); bottom: 20px; }
 #desk-scene .popover { top: 110px; left: min(205px, 20%); max-height: calc(100% - 134px); overflow: auto; }
@@ -144,7 +149,6 @@ body[data-detail] #desk-scene .graph-controls { opacity: 1; }
   #desk-scene .brand-name { display: none; }
   #desk-scene .selection-tools { bottom: 76px; }
   #desk-scene .selection-tools > span { display: none; }
-  #desk-scene #graph-board { bottom: 132px; }
 }
 
 @media (max-width: 650px) {
@@ -168,11 +172,12 @@ body[data-detail] #desk-scene .graph-controls { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #desk-scene.scene-shell, #scene-hook, #desk-scene #manager { transition: none; }
+  #desk-scene.scene-shell, #scene-hook, #scene-hook-front, #desk-scene #manager { transition: none; }
   body[data-detail] #desk-scene #manager { filter: none; }
 }
 
 html[data-effects="off"] #desk-scene.scene-shell,
 html[data-effects="off"] #scene-hook,
+html[data-effects="off"] #scene-hook-front,
 html[data-effects="off"] #desk-scene #manager { transition: none; }
 html[data-effects="off"] body[data-detail] #desk-scene #manager { filter: none; }

@@ -115,7 +115,7 @@
 }
 .dg-card-title-input { height: 1.15em; max-height: 100%; white-space: nowrap; overflow: hidden; scrollbar-width: none; overscroll-behavior: none; }
 .dg-card-title-input::-webkit-scrollbar { display: none; }
-.dg-card-title-input:focus-visible, .dg-card-description-input:focus-visible { outline: 1px dashed #998771; outline-offset: 4px; }
+.dg-card-title-input:focus-visible, .dg-card-description-input:focus-visible { outline: none; }
 .dg-card-title-input::placeholder, .dg-card-description-input::placeholder { color: inherit; opacity: .5; }
 .dg-card-category {
   position: absolute;
@@ -145,20 +145,24 @@
   box-shadow: none;
   transform: none;
   transition: none;
-  cursor: ew-resize;
+  cursor: grab;
   touch-action: none;
   -webkit-user-drag: none;
 }
 .dg-sticker-button:disabled { opacity: 1; cursor: default; }
 .dg-sticker-button:focus-visible { outline: 2px dashed #575045; outline-offset: 5px; }
 .dg-sticker-image { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; user-select: none; -webkit-user-drag: none; filter: drop-shadow(1px 2px 1px #3a2d1926); }
-.dg-sticker-button.is-peeling { cursor: grabbing; }
+.dg-sticker-button:active:not(:disabled), .dg-sticker-button.is-peeling { cursor: grabbing; }
 .dg-sticker-canvas { position: fixed; z-index: 100; pointer-events: none; contain: strict; }
 
 /* Arrow tags sit beneath the face and its shadow. The exposed edge remains
    directly clickable; their covered portion is not an invisible hit target. */
 .dg-card-tags { position: absolute; z-index: -3; inset: 0; pointer-events: none; }
 .dg-paper-tag {
+  --tag-lift-y: 0px;
+  --tag-shadow-x: 1px;
+  --tag-shadow-y: 2px;
+  --tag-shadow-direction: 1;
   position: relative;
   isolation: isolate;
   display: inline-flex;
@@ -180,20 +184,23 @@
   cursor: pointer;
   pointer-events: auto;
 }
-.dg-paper-tag::before {
+.dg-paper-tag::before, .dg-paper-tag::after {
   content: '';
   position: absolute;
-  z-index: -1;
   inset: 0;
-  background: var(--tag-color, #c1c5a6);
   /* Keep the source arrow's 38.31 / 44.23 head geometry as its shaft grows. */
   clip-path: polygon(0 0, calc(100% - 1.277em) 0, 100% 50%, calc(100% - 1.277em) 100%, 0 100%);
   pointer-events: none;
+  transition: translate 180ms cubic-bezier(.2,.8,.2,1);
 }
+.dg-paper-tag::before { z-index: -1; background: var(--tag-color, #f0bd78); translate: 0 var(--tag-lift-y); }
+.dg-paper-tag::after { z-index: -2; background: #36363687; translate: calc(var(--tag-shadow-x) * var(--tag-shadow-direction)) var(--tag-shadow-y); }
+.dg-paper-tag.is-raised { --tag-lift-y: -.16em; --tag-shadow-x: .13em; --tag-shadow-y: .23em; }
 .dg-paper-tag:not(:disabled), .dg-paper-tag:active:not(:disabled) { background: transparent; box-shadow: none; transform: none; }
 .dg-paper-tag:focus-visible { outline: 1px dashed #565046; outline-offset: 2px; }
-.dg-paper-tag-label { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.dg-paper-tag-label { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; translate: 0 var(--tag-lift-y); transition: translate 180ms cubic-bezier(.2,.8,.2,1); }
 .dg-card-tags > .dg-paper-tag {
+  --tag-shadow-direction: -1;
   position: absolute;
   left: -7.5cqw;
   top: 35.86%;
@@ -205,7 +212,7 @@
   font-size: 4.8282cqw;
   font-weight: 400;
   line-height: 1.1;
-  clip-path: inset(-2px -2px -2px 32.5cqw);
+  clip-path: inset(-.4em -.45em -.55em 32.5cqw);
 }
 .dg-card-tags > .dg-paper-tag, .dg-card-tags > .dg-paper-tag:active:not(:disabled) { transform: scaleX(-1); }
 .dg-card-tags > .dg-paper-tag[data-tag="category"] { top: 47.27%; }
@@ -230,5 +237,5 @@
 .dg-note-clip-back { background-image: url('./assets/paper/paperclip-back.svg'); clip-path: inset(0 65.89149% 0 0); }
 .dg-note-clip-front { background-image: url('./assets/paper/paperclip-front.svg'); }
 .dg-note-clip:focus-visible { outline: 1px dashed #625a4c; outline-offset: 3px; }
-html[data-effects="off"] .dg-card-surface > *, html[data-effects="off"] .dg-paper-tag { transition: none !important; }
-@media (prefers-reduced-motion: reduce) { .dg-card-surface > *, .dg-paper-tag { transition: none !important; } }
+html[data-effects="off"] .dg-card-surface > *, html[data-effects="off"] .dg-paper-tag, html[data-effects="off"] .dg-paper-tag::before, html[data-effects="off"] .dg-paper-tag::after, html[data-effects="off"] .dg-paper-tag-label { transition: none !important; }
+@media (prefers-reduced-motion: reduce) { .dg-card-surface > *, .dg-paper-tag, .dg-paper-tag::before, .dg-paper-tag::after, .dg-paper-tag-label { transition: none !important; } }
