@@ -888,7 +888,9 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
     const edgePoint = await center(edge);
     await page.mouse.move(edgePoint.x, edgePoint.y); await page.waitForTimeout(100);
     const board = await page.locator('#graph-board').boundingBox();
-    await drag(edgePoint, { x: board.x + board.width - 40, y: board.y + board.height - 60 });
+    await drag(edgePoint, { x: board.x + board.width - 40, y: board.y + board.height - 60 }, undefined, async () => {
+      assert.equal(await edge.evaluate(handle => handle.closest('.dg-edge').classList.contains('is-rewiring')), true, 'an existing endpoint remains grabbable through port padding when zoomed out');
+    });
     assert.ok(!(await workspace()).links.some(link => link.sourceId === fixture.origin && link.targetId === fixture.pcb), 'dragging an endpoint into empty space disconnects');
     await page.locator('#undo').click();
     assert.ok((await workspace()).links.some(link => link.sourceId === fixture.origin && link.targetId === fixture.pcb), 'undo restores disconnected edge');
