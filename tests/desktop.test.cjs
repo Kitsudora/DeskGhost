@@ -625,8 +625,8 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
     await card(fixture.pcb).waitFor();
     const revealCards = async (...ids) => {
       await waitScene(true);
-      // Pan through the public wheel interaction; the later pointer checks use
-      // full-size cards after the bounded zoom checks restore that size.
+      // Use public zoom and pan so all requested pointer targets fit on the
+      // runner's desktop; panning alone cannot reveal distant rows together.
       for (let attempt = 0; attempt < 4; attempt++) {
         const shift = await page.locator('#graph-board').evaluate((board, ids) => {
           const bounds = board.getBoundingClientRect();
@@ -634,8 +634,13 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
           const left = Math.min(...cards.map(box => box.left)) - 38, right = Math.max(...cards.map(box => box.right)) + 38;
           const top = Math.min(...cards.map(box => box.top)) - 38, bottom = Math.max(...cards.map(box => box.bottom)) + 28;
           return { x: left < bounds.left ? left - bounds.left : right > bounds.right ? right - bounds.right : 0,
-            y: top < bounds.top ? top - bounds.top : bottom > bounds.bottom ? bottom - bounds.bottom : 0 };
+            y: top < bounds.top ? top - bounds.top : bottom > bounds.bottom ? bottom - bounds.bottom : 0,
+            zoom: Math.min(1, (bounds.width - 76) / (right - left - 76), (bounds.height - 66) / (bottom - top - 66)) };
         }, ids);
+        if (shift.zoom < .999) {
+          await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: -Math.log(shift.zoom) / .0015, ctrlKey: true });
+          continue;
+        }
         if (Math.abs(shift.x) > 1) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: shift.x, shiftKey: true });
         if (Math.abs(shift.y) > 1) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: shift.y });
         if (Math.abs(shift.x) <= 1 && Math.abs(shift.y) <= 1) break;
