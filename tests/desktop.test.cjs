@@ -852,6 +852,10 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
     await page.locator('#fit-graph').click(); await page.waitForTimeout(300);
     await connect(fixture.origin, fixture.pcb);
     assert.ok((await workspace()).links.some(link => link.sourceId === fixture.origin && link.targetId === fixture.pcb), 'drag connects cards');
+    // Keep the third-row drop inside small CI desktops. At full size it can
+    // land beyond the board and start edge panning while we inspect the ghost.
+    for (let i = 0; i < 4; i++) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: 1200, ctrlKey: true });
+    await page.locator('#fit-graph').click();
     await revealCards(fixture.pcb, fixture.algorithm);
     const start = await card(fixture.pcb).boundingBox();
     const next = await card(fixture.algorithm).boundingBox();
@@ -872,6 +876,7 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
       return state.documents.find(doc => doc.id === workspaceId).workspace.tasks.find(task => task.id === taskId).row === 2;
     }, { workspaceId: fixture.workspaceId, taskId: fixture.pcb }, { polling: 100, timeout: 5000 });
     assert.equal((await workspace()).tasks.find(task => task.id === fixture.pcb).row, 2, 'card snaps to a free row');
+    for (let i = 0; i < 4; i++) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: -1200, ctrlKey: true });
     await page.locator('#fit-graph').click(); await page.waitForTimeout(300);
     await revealCards(fixture.origin, fixture.pcb);
     const edge = page.locator(`.dg-edge-handle[data-edge-key="${fixture.origin}:${fixture.pcb}"][data-endpoint="target"]`);
