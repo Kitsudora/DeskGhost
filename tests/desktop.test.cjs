@@ -1164,6 +1164,7 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
           returning: composer.classList.contains('is-returning'), hidden: composer.hidden,
           formInert: document.getElementById('task-form').inert, editorFocused: composer.contains(document.activeElement),
           selected: original.classList.contains('is-selected'), visible: getComputedStyle(original).visibility === 'visible',
+          graphScale: graphRect.width / original.offsetWidth,
           progress: editor.getAnimations()[0]?.effect.getComputedTiming().progress ?? null,
           distance: Math.hypot(editorRect.left - graphRect.left, editorRect.top - graphRect.top),
           editor: material(document.getElementById('detail-card'), editorRect.width), graph: material(original.querySelector('.dg-card-surface'), graphRect.width)
@@ -1181,7 +1182,7 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
     assert.ok(travelling.length > 2 && landed.length > 2, 'the physical return and the frames after handover were observed');
     assert.ok(travelling.every(frame => frame.selected && !frame.visible), 'selection settles while the original card is still hidden behind its returning face');
     assert.ok(travelling.every(frame => frame.formInert && !frame.editorFocused), 'the confirmed card stops accepting text throughout its return animation');
-    assert.ok(landed.every(frame => frame.selected && frame.graph.every((value, index) => Math.abs(value - [-7, 7, 9][index]) < .05)), 'the revealed graph card is already raised and never lifts a second time');
+    assert.ok(landed.every(frame => frame.selected && frame.graph.every((value, index) => Math.abs(value - [-7, 7, 9][index] * frame.graphScale) < .05)), 'the revealed graph card is already raised at the current zoom and never lifts a second time');
     const lastTravel = travelling.at(-1);
     assert.ok(lastTravel.progress > .94 && lastTravel.distance < 3 && lastTravel.editor.every((value, index) => Math.abs(value - lastTravel.graph[index]) < .35), 'the returning face and shadow meet the selected graph pose continuously');
     assert.equal(await card(fixture.algorithm).evaluate(element => element === window.testOriginalCard && !element.inert && getComputedStyle(element).visibility === 'visible'), true, 'Esc returns the original graph node instead of inserting a duplicate card');
