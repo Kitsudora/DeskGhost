@@ -619,8 +619,11 @@ export class TaskGraph {
     if (event.button !== 0) return;
     const target = event.target;
     const point = this.worldPoint(event);
-    const endpoint = target.closest('[data-endpoint]');
     const port = target.closest('[data-port]');
+    // A port's enlarged hit area can cover a nearby edge handle when zoomed
+    // out. Preserve the handle under that padding as the rewire target.
+    const endpoint = target.closest('[data-endpoint]') || (port && document.elementsFromPoint(event.clientX, event.clientY)
+      .find(node => node.matches('.dg-edge-handle') && this.edgeLayer.contains(node)));
     const card = target.closest('.dg-task-card');
     const edgeNode = target.closest('.dg-edge');
     if (endpoint && !this.options.categoryView) {

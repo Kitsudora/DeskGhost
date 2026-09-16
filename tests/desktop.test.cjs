@@ -625,8 +625,8 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
     await card(fixture.pcb).waitFor();
     const revealCards = async (...ids) => {
       await waitScene(true);
-      // Pan through the public wheel interaction; the later pointer checks use
-      // full-size cards after the bounded zoom checks restore that size.
+      // Use public zoom and pan so all requested pointer targets fit on the
+      // runner's desktop; panning alone cannot reveal distant rows together.
       for (let attempt = 0; attempt < 4; attempt++) {
         const shift = await page.locator('#graph-board').evaluate((board, ids) => {
           const bounds = board.getBoundingClientRect();
@@ -634,8 +634,13 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
           const left = Math.min(...cards.map(box => box.left)) - 38, right = Math.max(...cards.map(box => box.right)) + 38;
           const top = Math.min(...cards.map(box => box.top)) - 38, bottom = Math.max(...cards.map(box => box.bottom)) + 28;
           return { x: left < bounds.left ? left - bounds.left : right > bounds.right ? right - bounds.right : 0,
-            y: top < bounds.top ? top - bounds.top : bottom > bounds.bottom ? bottom - bounds.bottom : 0 };
+            y: top < bounds.top ? top - bounds.top : bottom > bounds.bottom ? bottom - bounds.bottom : 0,
+            zoom: Math.min(1, (bounds.width - 76) / (right - left - 76), (bounds.height - 66) / (bottom - top - 66)) };
         }, ids);
+        if (shift.zoom < .999) {
+          await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: -Math.log(shift.zoom) / .0015, ctrlKey: true });
+          continue;
+        }
         if (Math.abs(shift.x) > 1) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: shift.x, shiftKey: true });
         if (Math.abs(shift.y) > 1) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: shift.y });
         if (Math.abs(shift.x) <= 1 && Math.abs(shift.y) <= 1) break;
@@ -852,6 +857,10 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
     await page.locator('#fit-graph').click(); await page.waitForTimeout(300);
     await connect(fixture.origin, fixture.pcb);
     assert.ok((await workspace()).links.some(link => link.sourceId === fixture.origin && link.targetId === fixture.pcb), 'drag connects cards');
+    // Keep the third-row drop inside small CI desktops. At full size it can
+    // land beyond the board and start edge panning while we inspect the ghost.
+    for (let i = 0; i < 4; i++) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: 1200, ctrlKey: true });
+    await page.locator('#fit-graph').click();
     await revealCards(fixture.pcb, fixture.algorithm);
     const start = await card(fixture.pcb).boundingBox();
     const next = await card(fixture.algorithm).boundingBox();
@@ -872,13 +881,16 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
       return state.documents.find(doc => doc.id === workspaceId).workspace.tasks.find(task => task.id === taskId).row === 2;
     }, { workspaceId: fixture.workspaceId, taskId: fixture.pcb }, { polling: 100, timeout: 5000 });
     assert.equal((await workspace()).tasks.find(task => task.id === fixture.pcb).row, 2, 'card snaps to a free row');
+    for (let i = 0; i < 4; i++) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: -1200, ctrlKey: true });
     await page.locator('#fit-graph').click(); await page.waitForTimeout(300);
     await revealCards(fixture.origin, fixture.pcb);
     const edge = page.locator(`.dg-edge-handle[data-edge-key="${fixture.origin}:${fixture.pcb}"][data-endpoint="target"]`);
     const edgePoint = await center(edge);
     await page.mouse.move(edgePoint.x, edgePoint.y); await page.waitForTimeout(100);
     const board = await page.locator('#graph-board').boundingBox();
-    await drag(edgePoint, { x: board.x + board.width - 40, y: board.y + board.height - 60 });
+    await drag(edgePoint, { x: board.x + board.width - 40, y: board.y + board.height - 60 }, undefined, async () => {
+      assert.equal(await edge.evaluate(handle => handle.closest('.dg-edge').classList.contains('is-rewiring')), true, 'an existing endpoint remains grabbable through port padding when zoomed out');
+    });
     assert.ok(!(await workspace()).links.some(link => link.sourceId === fixture.origin && link.targetId === fixture.pcb), 'dragging an endpoint into empty space disconnects');
     await page.locator('#undo').click();
     assert.ok((await workspace()).links.some(link => link.sourceId === fixture.origin && link.targetId === fixture.pcb), 'undo restores disconnected edge');
@@ -1152,6 +1164,7 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
           returning: composer.classList.contains('is-returning'), hidden: composer.hidden,
           formInert: document.getElementById('task-form').inert, editorFocused: composer.contains(document.activeElement),
           selected: original.classList.contains('is-selected'), visible: getComputedStyle(original).visibility === 'visible',
+          graphScale: graphRect.width / original.offsetWidth,
           progress: editor.getAnimations()[0]?.effect.getComputedTiming().progress ?? null,
           distance: Math.hypot(editorRect.left - graphRect.left, editorRect.top - graphRect.top),
           editor: material(document.getElementById('detail-card'), editorRect.width), graph: material(original.querySelector('.dg-card-surface'), graphRect.width)
@@ -1169,7 +1182,7 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
     assert.ok(travelling.length > 2 && landed.length > 2, 'the physical return and the frames after handover were observed');
     assert.ok(travelling.every(frame => frame.selected && !frame.visible), 'selection settles while the original card is still hidden behind its returning face');
     assert.ok(travelling.every(frame => frame.formInert && !frame.editorFocused), 'the confirmed card stops accepting text throughout its return animation');
-    assert.ok(landed.every(frame => frame.selected && frame.graph.every((value, index) => Math.abs(value - [-7, 7, 9][index]) < .05)), 'the revealed graph card is already raised and never lifts a second time');
+    assert.ok(landed.every(frame => frame.selected && frame.graph.every((value, index) => Math.abs(value - [-7, 7, 9][index] * frame.graphScale) < .05)), 'the revealed graph card is already raised at the current zoom and never lifts a second time');
     const lastTravel = travelling.at(-1);
     assert.ok(lastTravel.progress > .94 && lastTravel.distance < 3 && lastTravel.editor.every((value, index) => Math.abs(value - lastTravel.graph[index]) < .35), 'the returning face and shadow meet the selected graph pose continuously');
     assert.equal(await card(fixture.algorithm).evaluate(element => element === window.testOriginalCard && !element.inert && getComputedStyle(element).visibility === 'visible'), true, 'Esc returns the original graph node instead of inserting a duplicate card');
