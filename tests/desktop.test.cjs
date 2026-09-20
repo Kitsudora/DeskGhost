@@ -180,9 +180,24 @@ test('speed dismissal is independent of direction, position and display scale', 
 
 test('card geometry, connection previews and sticker swipes preserve task rules', async () => {
   const { nextStickerState, stickerGestureDirection, peelSurface } = await import('../desktop/web/sticker.js');
-  const { graphGeometry, validateConnection, planConnection } = await import('../desktop/web/graph.js');
+  const { TaskGraph, graphGeometry, validateConnection, planConnection } = await import('../desktop/web/graph.js');
   assert.equal(graphGeometry.cardWidth / graphGeometry.cardHeight, 621.3463 / 457.9779);
   assert.ok(graphGeometry.columnStep > graphGeometry.cardWidth && graphGeometry.rowStep > graphGeometry.cardHeight);
+  const graph = Object.assign(Object.create(TaskGraph.prototype), {
+    workspace: {}, options: {}, container: { clientHeight: 1600, clientWidth: 1200 },
+    camera: { x: 66, y: 24, scale: 1 }, contentHeight: graphGeometry.top + graphGeometry.cardHeight + 40
+  });
+  assert.ok(graph.verticalOverflow && graph.cameraBounds().minY < 24, 'a short graph on a tall display has space to scroll before adding rows');
+  const boundary = graph.cameraBounds().minY;
+  graph.camera.y = boundary - 1000;
+  assert.equal(graph.cameraBounds().minY, boundary, 'moving the camera does not keep growing empty space');
+  graph.camera.scale = .4;
+  assert.ok(graph.verticalOverflow && graph.cameraBounds().minY < 24, 'spare rows remain accessible after zooming out');
+  graph.contentHeight = graphGeometry.top + graphGeometry.rowStep * 4095 + graphGeometry.cardHeight + 40;
+  assert.equal(graph.scrollHeight, graph.contentHeight, 'spare space cannot extend beyond the last supported row');
+  graph.options.categoryView = true;
+  graph.contentHeight = graphGeometry.top + graphGeometry.cardHeight + 40;
+  assert.equal(graph.verticalOverflow, false, 'category lists retain their content-based scroll boundary');
   const archived = { id: 'archived', column: 0, row: 0, isArchived: true }, active = { id: 'active', column: 1, row: 0, isArchived: false };
   assert.equal(validateConnection(archived, active), false, 'new connections cannot split an archived chain');
   assert.deepEqual(planConnection([archived, active], [], archived.id, active.id), { valid: false, reason: 'Restore the archived chain before connecting it to active tasks.' });
@@ -625,17 +640,22 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
     await card(fixture.pcb).waitFor();
     const revealCards = async (...ids) => {
       await waitScene(true);
-      // Pan through the public wheel interaction; the later pointer checks use
-      // full-size cards after the bounded zoom checks restore that size.
-      for (let attempt = 0; attempt < 4; attempt++) {
+      // Fit the requested targets before panning; a small desktop cannot show
+      // distant rows together at full size. Keep using the public wheel path.
+      for (let attempt = 0; attempt < 6; attempt++) {
         const shift = await page.locator('#graph-board').evaluate((board, ids) => {
           const bounds = board.getBoundingClientRect();
           const cards = ids.map(id => board.querySelector(`.dg-task-card[data-task-id="${id}"]`).getBoundingClientRect());
           const left = Math.min(...cards.map(box => box.left)) - 38, right = Math.max(...cards.map(box => box.right)) + 38;
           const top = Math.min(...cards.map(box => box.top)) - 38, bottom = Math.max(...cards.map(box => box.bottom)) + 28;
           return { x: left < bounds.left ? left - bounds.left : right > bounds.right ? right - bounds.right : 0,
-            y: top < bounds.top ? top - bounds.top : bottom > bounds.bottom ? bottom - bounds.bottom : 0 };
+            y: top < bounds.top ? top - bounds.top : bottom > bounds.bottom ? bottom - bounds.bottom : 0,
+            fit: Math.min((bounds.width - 76) / (right - left - 76), (bounds.height - 66) / (bottom - top - 66)) };
         }, ids);
+        if (shift.fit < .99) {
+          await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: Math.log(1 / Math.max(.05, shift.fit)) / .0015, ctrlKey: true });
+          continue;
+        }
         if (Math.abs(shift.x) > 1) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: shift.x, shiftKey: true });
         if (Math.abs(shift.y) > 1) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: shift.y });
         if (Math.abs(shift.x) <= 1 && Math.abs(shift.y) <= 1) break;
@@ -680,6 +700,37 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
     });
     const graphGeometry = await page.evaluate(async () => (await import('./graph.js')).graphGeometry);
     const camera = () => page.locator('.dg-graph-stage').evaluate(element => { const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform); return { x: matrix.m41, y: matrix.m42, scale: matrix.m11 }; });
+    const boardStyle = await page.locator('#graph-board').getAttribute('style');
+    const beforeOverlap = await workspace();
+    try {
+      // Force the overlap even on a large development monitor. The invisible
+      // port padding stays finger-sized while the visible graph shrinks.
+      await page.locator('#graph-board').evaluate(board => { board.style.height = '360px'; });
+      await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: 1200, ctrlKey: true });
+      await revealCards(fixture.origin, fixture.algorithm);
+      await card(fixture.algorithm).locator('.dg-card-description').click();
+      const handle = page.locator(`.dg-edge-handle[data-edge-key="${fixture.origin}:${fixture.algorithm}"][data-endpoint="target"]`);
+      const point = await center(handle);
+      assert.equal(await page.evaluate(point => {
+        const port = document.elementFromPoint(point.x, point.y)?.closest('[data-port]');
+        if (!port) return false;
+        const bounds = port.getBoundingClientRect();
+        return point.x < bounds.left || point.x > bounds.right || point.y < bounds.top || point.y > bounds.bottom;
+      }, point), true, 'the regression hits port padding covering an existing endpoint');
+      await page.mouse.move(point.x, point.y); await page.mouse.down();
+      assert.equal(await handle.evaluate(node => node.closest('.dg-edge').classList.contains('is-rewiring')), true, 'port padding preserves the existing connection drag');
+      await page.keyboard.press('Escape'); await page.mouse.up();
+      const portCenter = await center(card(fixture.algorithm).locator('[data-port="in"]'));
+      await page.mouse.move(portCenter.x, portCenter.y); await page.mouse.down();
+      assert.equal(await page.locator('#graph-board').evaluate(board => board.classList.contains('is-linking') && !board.querySelector('.is-rewiring')), true, 'the visible port itself still starts a new connection');
+      await page.keyboard.press('Escape'); await page.mouse.up();
+      assert.deepEqual(await workspace(), beforeOverlap, 'cancelling either drag leaves the original graph intact');
+    } finally {
+      await page.mouse.up().catch(() => {});
+      await page.locator('#graph-board').evaluate((board, style) => { if (style === null) board.removeAttribute('style'); else board.setAttribute('style', style); }, boardStyle);
+      await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: -1200, ctrlKey: true });
+      await page.locator('#fit-graph').click();
+    }
     const beforeWheel = await camera();
     const horizontalOverflow = await page.locator('#graph-board').evaluate(board => {
       const last = board.querySelector('.dg-new-column') || board.querySelector('.dg-column:last-child');
@@ -712,14 +763,42 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
     await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: 1200, ctrlKey: true });
     assert.ok(Math.abs((await camera()).scale - smallest.scale) < .00001, 'further zoom-out remains at the five-row bound');
     await page.locator('#undo').click();
-    for (let i = 0; i < 4; i++) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: -1200, ctrlKey: true });
-    assert.equal((await camera()).scale, 1, 'zooming back in restores the original maximum size');
     await page.locator('#fit-graph').click();
     await revealCards(fixture.pcb);
     const beforeRows = await camera();
-    const allRowsFit = await page.locator('#graph-board').evaluate(board => Math.max(...[...board.querySelectorAll('.dg-task-card')].map(card => card.getBoundingClientRect().bottom)) <= board.getBoundingClientRect().bottom);
+    const beforeEmptyScroll = await workspace();
+    assert.equal(await page.locator('#graph-board').evaluate(board => Math.max(...[...board.querySelectorAll('.dg-task-card')].map(card => card.getBoundingClientRect().bottom)) <= board.getBoundingClientRect().bottom), true, 'the existing rows fit before scrolling into empty space');
     await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: 120 });
-    if (allRowsFit) assert.equal((await camera()).y, beforeRows.y, 'ordinary wheel leaves a board with no overflowing rows still');
+    assert.ok((await camera()).y < beforeRows.y, 'ordinary wheel exposes empty rows without moving or adding a card first');
+    assert.equal((await camera()).x, beforeRows.x, 'ordinary wheel keeps the current time slice');
+    assert.equal((await camera()).scale, beforeRows.scale);
+    for (let i = 0; i < 3; i++) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: 1200 });
+    const emptyBoundary = await camera();
+    await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: 1200 });
+    assert.deepEqual(await camera(), emptyBoundary, 'continued scrolling stops at a finite spare-row boundary');
+    assert.deepEqual(await workspace(), beforeEmptyScroll, 'browsing empty rows does not create or change task data');
+    await page.locator('#fit-graph').click(); await revealCards(fixture.pcb);
+    const emptyPanStart = await center(card(fixture.pcb).locator('.dg-card-description')), beforeEmptyPan = await camera();
+    await page.mouse.move(emptyPanStart.x, emptyPanStart.y); await page.mouse.down({ button: 'middle' });
+    await page.mouse.move(emptyPanStart.x, emptyPanStart.y - 60, { steps: 6 }); await page.mouse.up({ button: 'middle' });
+    assert.ok(Math.abs((await camera()).y - (beforeEmptyPan.y - 60)) < 1, 'middle dragging reaches empty rows without requiring an overflowing task stack');
+    assert.deepEqual(await workspace(), beforeEmptyScroll);
+    await page.locator('#fit-graph').click(); await revealCards(fixture.pcb);
+    const emptyDropStart = await center(card(fixture.pcb).locator('.dg-card-description'));
+    await page.mouse.move(emptyDropStart.x, emptyDropStart.y); await page.mouse.down();
+    await page.mouse.move(emptyDropStart.x + 8, emptyDropStart.y, { steps: 2 });
+    await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: graphGeometry.rowStep * 2 * (await camera()).scale });
+    await page.mouse.up();
+    await page.waitForFunction(async ({ workspaceId, taskId }) => {
+      const state = await window.deskghost.invoke('bootstrap');
+      return state.documents.find(doc => doc.id === workspaceId).workspace.tasks.find(task => task.id === taskId).row === 2;
+    }, { workspaceId: fixture.workspaceId, taskId: fixture.pcb });
+    assert.deepEqual((await workspace()).links, beforeEmptyScroll.links, 'scrolling a held card into a new row preserves its connections');
+    await page.locator('#undo').click();
+    assert.deepEqual((await workspace()).tasks.map(task => [task.id, task.column, task.row]), beforeEmptyScroll.tasks.map(task => [task.id, task.column, task.row]), 'placing in an empty row remains one undoable move');
+    for (let i = 0; i < 4; i++) await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: -1200, ctrlKey: true });
+    assert.equal((await camera()).scale, 1, 'zooming back in restores the original maximum size');
+    await page.locator('#fit-graph').click(); await revealCards(fixture.pcb);
     await card(fixture.pcb).locator('.dg-card-description').click();
     await page.evaluate(({ workspaceId, taskId }) => window.deskghost.invoke('moveTask', { workspaceId, taskId, column: 1, row: 40 }), { workspaceId: fixture.workspaceId, taskId: fixture.algorithm });
     const beforeMiddleData = await workspace();
@@ -852,6 +931,10 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
     await page.locator('#fit-graph').click(); await page.waitForTimeout(300);
     await connect(fixture.origin, fixture.pcb);
     assert.ok((await workspace()).links.some(link => link.sourceId === fixture.origin && link.targetId === fixture.pcb), 'drag connects cards');
+    // This drag targets row three, which must stay away from the viewport edge
+    // while we inspect the held card and its snap preview.
+    await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: 1200, ctrlKey: true });
+    await page.locator('#fit-graph').click();
     await revealCards(fixture.pcb, fixture.algorithm);
     const start = await card(fixture.pcb).boundingBox();
     const next = await card(fixture.algorithm).boundingBox();
@@ -872,6 +955,7 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
       return state.documents.find(doc => doc.id === workspaceId).workspace.tasks.find(task => task.id === taskId).row === 2;
     }, { workspaceId: fixture.workspaceId, taskId: fixture.pcb }, { polling: 100, timeout: 5000 });
     assert.equal((await workspace()).tasks.find(task => task.id === fixture.pcb).row, 2, 'card snaps to a free row');
+    await page.locator('#graph-board').dispatchEvent('wheel', { deltaY: -1200, ctrlKey: true });
     await page.locator('#fit-graph').click(); await page.waitForTimeout(300);
     await revealCards(fixture.origin, fixture.pcb);
     const edge = page.locator(`.dg-edge-handle[data-edge-key="${fixture.origin}:${fixture.pcb}"][data-endpoint="target"]`);
@@ -1152,6 +1236,7 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
           returning: composer.classList.contains('is-returning'), hidden: composer.hidden,
           formInert: document.getElementById('task-form').inert, editorFocused: composer.contains(document.activeElement),
           selected: original.classList.contains('is-selected'), visible: getComputedStyle(original).visibility === 'visible',
+          scale: graphRect.width / original.offsetWidth,
           progress: editor.getAnimations()[0]?.effect.getComputedTiming().progress ?? null,
           distance: Math.hypot(editorRect.left - graphRect.left, editorRect.top - graphRect.top),
           editor: material(document.getElementById('detail-card'), editorRect.width), graph: material(original.querySelector('.dg-card-surface'), graphRect.width)
@@ -1169,7 +1254,7 @@ test('leather workspace: direct manipulation, keyboard capture and durable saves
     assert.ok(travelling.length > 2 && landed.length > 2, 'the physical return and the frames after handover were observed');
     assert.ok(travelling.every(frame => frame.selected && !frame.visible), 'selection settles while the original card is still hidden behind its returning face');
     assert.ok(travelling.every(frame => frame.formInert && !frame.editorFocused), 'the confirmed card stops accepting text throughout its return animation');
-    assert.ok(landed.every(frame => frame.selected && frame.graph.every((value, index) => Math.abs(value - [-7, 7, 9][index]) < .05)), 'the revealed graph card is already raised and never lifts a second time');
+    assert.ok(landed.every(frame => frame.selected && frame.graph.every((value, index) => Math.abs(value / frame.scale - [-7, 7, 9][index]) < .05)), 'the revealed graph card is already raised at its displayed scale and never lifts a second time');
     const lastTravel = travelling.at(-1);
     assert.ok(lastTravel.progress > .94 && lastTravel.distance < 3 && lastTravel.editor.every((value, index) => Math.abs(value - lastTravel.graph[index]) < .35), 'the returning face and shadow meet the selected graph pose continuously');
     assert.equal(await card(fixture.algorithm).evaluate(element => element === window.testOriginalCard && !element.inert && getComputedStyle(element).visibility === 'visible'), true, 'Esc returns the original graph node instead of inserting a duplicate card');

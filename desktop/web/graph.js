@@ -165,7 +165,7 @@ export class TaskGraph {
     this.container.classList.add('dg-graph');
     this.container.tabIndex = 0;
     this.container.setAttribute('role', 'region');
-    this.container.setAttribute('aria-label', 'Task graph. Select a card to reveal its connection points. Drag cards to move them or to the bin. Hold the middle mouse button and drag to pan. Ctrl and wheel zoom between full size and five rows. Shift and wheel scroll time slices; wheel scrolls overflowing rows.');
+    this.container.setAttribute('aria-label', 'Task graph. Select a card to reveal its connection points. Drag cards to move them or to the bin. Hold the middle mouse button and drag to pan. Ctrl and wheel zoom between full size and five rows. Shift and wheel scroll time slices; wheel scrolls rows, including empty space for placing cards.');
     this.stage = element('div', 'dg-graph-stage');
     this.columnsLayer = element('div', 'dg-columns');
     this.edgeLayer = svgElement('svg', { class: 'dg-edges', 'aria-label': 'Task connections' });
@@ -394,7 +394,7 @@ export class TaskGraph {
       for (const task of this.visibleTasks) this.positions.set(task.id, pointFor(task));
     }
     this.contentHeight = Math.max(TOP + CARD_HEIGHT, ...[...this.positions.values()].map(position => position.y + CARD_HEIGHT)) + CONTENT_BOTTOM;
-    this.worldHeight = Math.max(this.container.clientHeight / this.camera.scale, this.contentHeight);
+    this.worldHeight = Math.max(this.container.clientHeight / this.camera.scale, this.scrollHeight);
     this.worldWidth = (Math.max(1, lanes.length) - 1 + (!this.options.categoryView && lanes.length < 256 ? 1 : 0)) * COLUMN_STEP + CARD_WIDTH;
     lanes.forEach((lane, index) => {
       const column = element('section', 'dg-column');
@@ -619,8 +619,21 @@ export class TaskGraph {
     if (event.button !== 0) return;
     const target = event.target;
     const point = this.worldPoint(event);
-    const endpoint = target.closest('[data-endpoint]');
+    let endpoint = target.closest('[data-endpoint]');
     const port = target.closest('[data-port]');
+    if (!endpoint && port && !this.options.categoryView) {
+      const bounds = port.getBoundingClientRect();
+      // Zoom keeps the port's transparent hit padding large enough to cover an
+      // existing handle. Preserve the visible port, but let its own handle win
+      // within that padding; unrelated cards and the opposite side do not win.
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+        const side = port.dataset.port === 'out' ? 'source' : 'target';
+        endpoint = document.elementsFromPoint(event.clientX, event.clientY).find(node => {
+          const edge = this.edges.get(node.dataset?.edgeKey);
+          return edge?.[`${side}Handle`] === node && edge[`${side}Id`] === port.dataset.taskId;
+        });
+      }
+    }
     const card = target.closest('.dg-task-card');
     const edgeNode = target.closest('.dg-edge');
     if (endpoint && !this.options.categoryView) {
@@ -939,21 +952,31 @@ export class TaskGraph {
     this.camera.y = clamp(this.camera.y, minY, CAMERA_TOP);
     this.stage.style.transform = `translate3d(${this.camera.x}px, ${this.camera.y}px, 0) scale(${this.camera.scale})`;
     this.container.style.setProperty('--graph-scale', this.camera.scale);
-    const worldHeight = Math.max(this.container.clientHeight / this.camera.scale, this.contentHeight || 0);
+    const worldHeight = Math.max(this.container.clientHeight / this.camera.scale, this.scrollHeight);
     if (Math.abs(worldHeight - this.worldHeight) > .5) {
       this.worldHeight = worldHeight;
       for (const column of this.columnsLayer.children) column.style.height = `${worldHeight}px`;
     }
   }
 
+  get scrollHeight() {
+    const content = this.contentHeight || 0;
+    if (!this.workspace || this.options.categoryView) return content;
+    // Keep two spare rows even when the existing cards fit on a large screen.
+    // Derive space from content and viewport, never from the camera position:
+    // scrolling alone must not grow the board or exceed the saved row limit.
+    return Math.min(TOP + ROW_STEP * 4095 + CARD_HEIGHT + CONTENT_BOTTOM,
+      Math.max(content, (this.container.clientHeight - CAMERA_TOP) / this.camera.scale) + ROW_STEP * 2);
+  }
+
   get verticalOverflow() {
-    return (this.contentHeight || 0) * this.camera.scale + CAMERA_TOP > this.container.clientHeight + .5;
+    return this.scrollHeight * this.camera.scale + CAMERA_TOP > this.container.clientHeight + .5;
   }
 
   cameraBounds() {
     return {
       minX: Math.min(CAMERA_LEFT, this.container.clientWidth - (this.worldWidth || CARD_WIDTH) * this.camera.scale - CAMERA_LEFT),
-      minY: this.verticalOverflow ? this.container.clientHeight - this.contentHeight * this.camera.scale : CAMERA_TOP
+      minY: this.verticalOverflow ? this.container.clientHeight - this.scrollHeight * this.camera.scale : CAMERA_TOP
     };
   }
 

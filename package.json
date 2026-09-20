@@ -1,6 +1,6 @@
 {
   "name": "deskghost",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "description": "A transparent desktop companion with a spatial task graph",
   "private": true,
   "type": "module",

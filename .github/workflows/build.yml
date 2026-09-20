@@ -10,12 +10,14 @@ permissions:
 jobs:
   verify:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22.x'
@@ -31,5 +33,56 @@ jobs:
         run: dotnet run --project tests/DeskGhost.Checks/DeskGhost.Checks.csproj --configuration Release
       - name: Check desktop gesture logic
         run: npm test
-      - name: Check real Electron interaction and saving
+      - name: Check source Electron interaction and saving
+        env:
+          DESKGHOST_EXE: ''
         run: npm run test:ui
+      - name: Build portable Windows app
+        run: npm run build -- --out artifacts/ci-portable
+      - name: Check packaged Electron interaction and saving
+        env:
+          DESKGHOST_EXE: ${{ github.workspace }}/artifacts/ci-portable/DeskGhost-win32-x64/DeskGhost.exe
+        run: |
+          if (-not (Test-Path -LiteralPath $env:DESKGHOST_EXE -PathType Leaf)) {
+            throw 'The packaged executable was not produced.'
+          }
+          npm run test:ui
+      - name: Archive portable app and record SHA-256
+        run: |
+          $archive = 'artifacts/DeskGhost-win-x64.zip'
+          Compress-Archive -LiteralPath 'artifacts/ci-portable/DeskGhost-win32-x64' -DestinationPath $archive -CompressionLevel Optimal
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  DeskGhost-win-x64.zip" | Set-Content -LiteralPath "$archive.sha256" -Encoding ascii
+      - name: Verify archived ZIP against SHA-256 manifest
+        run: |
+          $archive = 'artifacts/DeskGhost-win-x64.zip'
+          $record = (Get-Content -LiteralPath "$archive.sha256" -Raw).Trim()
+          $match = [regex]::Match($record, '\A([0-9a-f]{64})  DeskGhost-win-x64\.zip\z')
+          if (-not $match.Success) {
+            throw 'The SHA-256 manifest is malformed.'
+          }
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $match.Groups[1].Value) {
+            throw 'The portable ZIP failed SHA-256 verification.'
+          }
+          Write-Output 'Portable ZIP SHA-256 verified.'
+      - name: Keep verified portable ZIP and SHA-256 manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeskGhost-portable-win-x64
+          path: |
+            artifacts/DeskGhost-win-x64.zip
+            artifacts/DeskGhost-win-x64.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Keep UI screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeskGhost-windows-ui-failure-screenshots
+          path: .local/web-smoke/**/*.png
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 0
