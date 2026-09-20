@@ -82,9 +82,9 @@ body.is-carrying #card-rotor { transition: none; }
   --card-shadow-y: calc(100cqw * 9 / 310);
 }
 #composer.is-returning .editor-front > * { transition-duration: .42s; }
-/* Keep the workspace menu on its paper panel; other popovers remain loose pieces. */
-#desk-scene :is(.popover:not(#workspace-menu),.search-panel,.name-prompt,.toast,.boot-screen) { background: transparent; border: 0; border-radius: 0; box-shadow: none; }
-#desk-scene :is(.popover:not(#workspace-menu),.search-panel,.name-prompt,.boot-screen) :is(.menu-action,.workspace-item,.search-result,input,.eyebrow,h1,h2,p) { background: #f2e5d0; border-radius: 2px; box-shadow: 1px 3px 0 #36363660; padding: 8px 14px; }
+/* Keep workspace selection and creation on paper panels; other popovers remain loose pieces. */
+#desk-scene :is(.popover:not(#workspace-menu),.search-panel,.toast,.boot-screen) { background: transparent; border: 0; border-radius: 0; box-shadow: none; }
+#desk-scene :is(.popover:not(#workspace-menu),.search-panel,.boot-screen) :is(.menu-action,.workspace-item,.search-result,input,.eyebrow,h1,h2,p) { background: #f2e5d0; border-radius: 2px; box-shadow: 1px 3px 0 #36363660; padding: 8px 14px; }
 #workspace-menu .workspace-item span:nth-child(2) { font-weight: 700; }
 #desk-scene .toast { color: #fff1de; text-shadow: 0 1px 2px #493825; pointer-events: none; }
 @media(max-width:900px){#task-form{width:min(600px,calc(100vw - 135px),calc((100vh - 240px)*1.35672))}.card-editor-footer .cap{padding:0 9px;font-size:10px}}

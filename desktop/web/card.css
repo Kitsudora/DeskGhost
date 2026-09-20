@@ -85,7 +85,8 @@
   left: 10.65%;
   top: 41.7%;
   width: 79%;
-  height: 35%;
+  /* Leave the same 9.1% gap below the text as above it, under the ribbon. */
+  height: 49.2%;
   margin: 0;
   color: var(--task-card-text-ink);
   font-family: var(--font-body, "Segoe UI", sans-serif);

@@ -122,6 +122,11 @@
 #desk-scene #manager { position: absolute; inset: 0; display: block; border-radius: inherit; pointer-events: none; }
 #desk-scene #manager > [data-interactive] { pointer-events: auto; }
 #desk-scene .workspace-bar { top: 24px; left: var(--scene-inset); right: var(--scene-inset); }
+/* Size the name key to its label, yielding only to the other toolbar controls. */
+#desk-scene .workspace-toggle { flex: 0 1 auto; min-width: 0; max-width: none; }
+#desk-scene .workspace-toggle .well { padding-inline: 2px; }
+#desk-scene .workspace-toggle .plunger { left: 0; width: 100%; }
+#desk-scene .workspace-toggle #workspace-name { min-width: 0; max-width: none; }
 #desk-scene .work-dock { top: 115px; left: var(--scene-inset); right: var(--scene-inset); }
 /* Cards continue behind the small tool buttons; no full-width footer clips
    the graph early and makes occupied space look empty. */
@@ -145,7 +150,6 @@ body[data-detail] #desk-scene .graph-controls { opacity: 1; }
 @media (max-width: 900px) {
   :root { --scene-side: 16px; --scene-inset: 18px; --scene-radius: 26px; }
   #desk-scene .workspace-bar { gap: 8px; padding-inline: 12px; }
-  #desk-scene .workspace-toggle { min-width: 120px; max-width: 220px; }
   #desk-scene .brand-name { display: none; }
   #desk-scene .selection-tools { bottom: 76px; }
   #desk-scene .selection-tools > span { display: none; }
@@ -156,7 +160,6 @@ body[data-detail] #desk-scene .graph-controls { opacity: 1; }
   .scene-leather::after { inset: 7px; border-radius: 15px; }
   #desk-scene .workspace-bar { top: 18px; min-height: 66px; gap: 5px; padding: 10px; }
   #desk-scene .workspace-bar .brand-mark, #desk-scene .workspace-bar .bar-divider { display: none; }
-  #desk-scene .workspace-toggle { min-width: 90px; max-width: 160px; }
   #desk-scene .work-dock { top: 100px; padding: 9px; gap: 8px; }
   #desk-scene .popover { left: var(--scene-inset); width: min(300px, calc(100% - 24px)); top: 92px; }
   #desk-scene .search-panel { top: 92px; width: calc(100% - 24px); }
