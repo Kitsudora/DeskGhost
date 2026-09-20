@@ -1,4 +1,4 @@
-const { existsSync, lstatSync, mkdirSync, copyFileSync, readFileSync } = require('node:fs');
+const { existsSync, lstatSync, mkdirSync, copyFileSync, readFileSync, writeFileSync } = require('node:fs');
 const { join, resolve, relative, isAbsolute, sep } = require('node:path');
 const { spawnSync } = require('node:child_process');
 const root = resolve(__dirname, '..');
@@ -11,7 +11,7 @@ const env = { ...process.env, DOTNET_CLI_TELEMETRY_OPTOUT: '1', DOTNET_ADD_GLOBA
 // Keep authoring files, personal notes, data and future root folders out by default.
 function ignorePackagePath(file) {
   const name = file.replaceAll('\\', '/');
-  return name !== '' && !/^\/(?:desktop(?:\/|$)|package\.json$|README\.md$)/.test(name);
+  return name !== '' && !/^\/(?:desktop(?:\/|$)|package\.json$|README\.md$|LICENSE$|assets(?:\/README\.md)?$)/.test(name);
 }
 
 function resolvePackageOutput(value) {
@@ -90,7 +90,11 @@ async function main(argv = process.argv.slice(2)) {
     });
     for (const folder of result) {
       mkdirSync(folder, { recursive: true });
-      copyFileSync(join(root, 'README.md'), join(folder, 'README.md'));
+      // Electron already has a top-level LICENSE; keep its notice intact.
+      writeFileSync(join(folder, 'README.md'), readFileSync(join(root, 'README.md'), 'utf8').replace('](LICENSE)', '](LICENSE-DeskGhost.txt)'));
+      copyFileSync(join(root, 'LICENSE'), join(folder, 'LICENSE-DeskGhost.txt'));
+      mkdirSync(join(folder, 'assets'), { recursive: true });
+      writeFileSync(join(folder, 'assets', 'README.md'), readFileSync(join(root, 'assets', 'README.md'), 'utf8').replace('](../LICENSE)', '](../LICENSE-DeskGhost.txt)'));
       console.log(`Portable application: ${folder}`);
     }
   }

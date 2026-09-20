@@ -1,178 +1,117 @@
-# DeskGhost 0.5.9
+# DeskGhost
 
-面向 Windows 的桌宠与任务图工具，使用 **Electron + HTML / CSS / Canvas**，没有传统 Windows 标题栏或边框。v0.5.9 为任务图预留可直接滚动到的空白行，扩大卡片正文显示区域，让顶部工作区键帽随名称伸展，并恢复新建工作区对话框的纸面背景；缩小任务图后，已有连线端点仍可拖动改接，端口圆点本身保留新建连线功能。保留取消创建时的粒子散开、首次快捷键呼出与 Esc 焦点修复，以及魔杖形状容错、粒子聚合成卡片和保存保护。场景外保持透明，界面使用英文。
+The purpose of this project is to make it easier to manage several groups of personal tasks at the same time, quickly record ideas, and experiment with an Agent's ability to extend artwork and animation designs while maintaining consistency.
 
-当前迭代延续 v0.2.0 的 Electron / HTML 功能基线。旧 WPF 界面已移除；.NET 10 `DeskGhost.Core` 与 `DeskGhost.Bridge` 只承担数据逻辑及进程通信，提供工作区版本迁移、安全保存和撤销历史。
+## The art experiment
 
-英文标题使用 **Bungee Regular 400**；中文标题与顶部工作区名称使用系统 **Microsoft YaHei Bold** 字形，缺失时尝试微软雅黑 UI 粗体或黑体，中英混排仍分别使用各自字形。卡片正文使用 **Teko Semibold 600**；纸标签使用 **Smiley Sans / 得意黑 400**，背面便签使用 **Teko Regular 400**。背面元数据优先使用用户本机已有的 **BankGothic Lt BT Light**，未安装时使用随应用提供的 **Orbitron Regular**，其字形与原稿 BankGothic 有所区别。BankGothic 与系统中文字体不随应用分发；Bungee、Teko、Smiley Sans 和 Orbitron 离线打包，SIL Open Font License 1.1 许可证及来源记录保存在 `desktop/web/assets/fonts/`。应用不从网络加载字体，缺失字形回退到系统字体。
+Put simply, I create art assets to show my vision for this project's art, especially things that are difficult to express in words and require fine-tuning of colors, layouts, and so on. These are all in [assets](assets/README.md). I then ask the Agent either to use them directly or to extend their style to complete the project's artwork, without having to draw too much of it by hand.
 
-## 运行与打包
+In practice, this has proven very effective for relatively simple designs like these. The Agent helped me accurately extend almost all of the artwork. For example, with the [Setting button design](assets/SVG/tab_button_example.svg) ([Illustrator project](assets/tab_button_example.ai)), the Agent can easily change its length and width to fit different places and add different text. And with the [stickers](assets/SVG/stopped.svg), simple prompts were enough for the Agent to create wonderful sticker-peeling and sticking effects. The [peeling demo](assets/SVG/card_peel_demo.html) is also available.
 
-开发需要 Windows、Node.js **22.12 或更新版本**及 **.NET 10 SDK**。在仓库目录运行：
+Overall, this whole design process has been a lot of fun. Although the design itself is relatively simple, it has still saved a considerable amount of repetitive work. Perhaps that ideal future, where AI assists human artistic creation rather than replacing it, really is possible.
+
+## What I did as the Agent
+
+I turned the supplied examples into reusable interface structures, styles, and graphic layers, then extended them into button variants, card fronts and backs, tags, notes, and hooks. I implemented the sticker-peeling and sticking animations, the shadows when a card is lifted, the rising and falling leather board, and the flocking keycap particles. I kept adjusting them as the author tried the interface and pointed out what needed to change.
+
+I also implemented the task graph interactions, local saving and recovery, shortcuts and gesture recognition, and the build and automated checks. I followed the author's visual direction and reference assets, with the author making the final design decisions. My automated checks cover some interaction and data boundaries; they do not amount to a complete human code review.
+
+## Installation
+
+### Download a prebuilt package
+
+Download the Windows x64 portable package from [GitHub Releases](https://github.com/Kitsudora/DeskGhost/releases/latest). The current release is [v0.5.9](https://github.com/Kitsudora/DeskGhost/releases/tag/v0.5.9).
+
+Extract the entire folder and run `DeskGhost.exe`. Keep all the accompanying files together. Electron and the .NET runtime are included, so you do not need to install Node.js or the .NET SDK separately. The release includes `SHA256SUMS.txt` for checking your download.
+
+This is currently an unsigned portable application, without an installer or automatic updates. To upgrade, exit the old version normally and extract the new version into a separate folder. Workspace data is stored separately from the application folder.
+
+### Run or build from source
+
+You need Windows, Git, Node.js **22.12 or later**, and the **.NET 10 SDK**.
 
 ```powershell
+git clone https://github.com/Kitsudora/DeskGhost.git
+cd DeskGhost
 npm ci
 npm start
 ```
 
-`npm start` 会先构建数据服务。构建脚本优先使用仓库内的 `.tools/dotnet/dotnet.exe`，没有该文件时使用 PATH 中的 `dotnet`。
-
-体验或验收时可使用独立数据目录：
-
-```powershell
-npm start -- --data-dir .local/demo
-```
-
-生成 Windows x64 便携目录：
+`npm start` builds the data service before starting the application. To build a portable package:
 
 ```powershell
 npm run build
 ```
 
-输出为 `artifacts/desktop/DeskGhost-win32-x64/`，运行其中的 `DeskGhost.exe`。迁移应用时复制整个目录；其中已包含 Electron 和数据服务所需的 .NET 运行时，目标设备无需安装 Node.js 或 .NET SDK。当前没有安装器、自动更新或自动开机启动。
+The output is in `artifacts/desktop/DeskGhost-win32-x64/`. The build script uses `.tools/dotnet/dotnet.exe` from the repository if present; otherwise, it uses `dotnet` from PATH.
 
-v0.5.9 便携版使用 `artifacts/release-0.5.9-final/DeskGhost-win32-x64/`，与已有版本分开保存。创建独立发布目录可执行：
+## Shortcuts and interactions
+
+Workspaces separate different groups of tasks. Logical time columns represent stages, not dates. Tasks created through a shortcut or the wand appear in the current workspace's latest column by default, using the category of its most recently created, non-deleted task. Connections represent where tasks come from and can branch or merge. A target always stays to the right of its sources; disconnecting removes the corresponding constraint.
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+Alt+N` | Globally summon a task card and start typing |
+| `Ctrl+Alt+G` | Globally open the task graph |
+| `Enter` / `Ctrl+Enter` | On the front of a new card: title → description → create; clicking `Done` also creates it |
+| `Shift+Enter` | Insert a line break in the description |
+| `Alt+F` | Flip the card while creating or editing; choose the workspace and category or add notes on the back |
+| `Alt+W` | Open the workspace tag selector while creating or editing |
+| `Esc` | Close the current popup, cancel a new card draft, return to the graph, or hide the interface; edits to an existing card are saved, not undone |
+| `Ctrl+F` | Find tasks in the graph |
+| `Ctrl+Z` | Undo a graph operation; inside a text field, this remains a text-editing shortcut |
+| `Ctrl+Y` / `Ctrl+Shift+Z` | Redo a graph operation when focus is outside a text field |
+| `Enter` / `F2` | Open the selected card in the graph |
+| `N` | Create a card when not typing in an input field |
+| `Shift` + mouse wheel | Browse time columns horizontally |
+| `Ctrl` + mouse wheel / `+` / `-` | Zoom the graph, from the original size down to five cards fitting vertically |
+
+Both global shortcuts can be changed in settings. You can create a card entirely from the front without going through tags or notes on the back. When editing an existing card, ordinary Enter inserts a line break in the description, while Ctrl+Enter confirms the edit.
+
+| Mouse interaction | Result |
+| --- | --- |
+| Draw two consecutive circles in the same direction while idle, then click once | Summon with the wand: after the keycap particles gather, click to start creating; gesture difficulty is adjustable in settings |
+| Move the mouse quickly while the wand is ready | Disperse the particles; the trigger speed is adjustable in settings |
+| Double-click a card / empty graph space | Enlarge the card for editing / create at that position; click `Done` to finish |
+| Drag a card | Move it and snap to a row and column; dragging into the new-column area on the far right adds a time column |
+| Select a card, then drag a connection point | Create a connection; drag an existing endpoint to reconnect it, or release it over empty space to disconnect |
+| Peel the status sticker from right to left / left to right | Advance the task status / return to the previous stage; peel upward or diagonally upward to stop the task |
+| Click a paper tag on the back | Select or create a workspace or category; write notes on the separate note paper |
+| Mouse wheel / hold the middle mouse button and drag | Browse vertically / pan the graph; two empty rows are reserved below, so you do not have to drag a card down to open a row first |
+| Drag a card into the bin | Move it to the recycle bin; click the bin to view and restore cards |
+
+The top bar switches between graph, category, and archive views and filters by status. Search supports title, category, and status. Archiving applies to the entire connected chain, whose tasks must all be completed or stopped; disconnect a card first if you want to archive it separately. Moving an existing card to another workspace also asks you to confirm disconnecting all of its connections. The wand is disabled while the graph is open. Particle animation and effects can be reduced or disabled in settings.
+
+## Data storage and management
+
+All tasks are stored locally, with no account or cloud synchronization.
+
+- **One file per workspace:** a UTF-8 `*.deskghost.json` file containing tasks, statuses, categories, connections, logical columns, layout, notes, and archive and recycle-bin records. The current workspace format is `formatVersion: 2`.
+- **Default location:** workspaces are in `%LOCALAPPDATA%\DeskGhost\Workspaces`, and settings are in `%LOCALAPPDATA%\DeskGhost\web-settings.json`. Settings can change the folder for new workspaces; already opened files stay at their existing locations.
+- **Automatic saving:** edits to existing cards save automatically; new cards are created only after confirmation. Saving writes a temporary file in the same directory, then atomically replaces the main file. The previous valid contents are retained as `.bak`. Write failures are reported.
+- **Backup and migration:** finish editing and exit normally, then copy the workspace files, optionally keeping their `.bak` files too. The interface provides export, Save as, and recovery from backup. Open a copied workspace file to continue using it. Copying the application folder alone does not copy your workspace data.
+- **Undo and recovery:** undo and redo are kept only for the current session, with up to 50 steps per workspace and a memory budget. Deleting a card does not delete other tasks. Restoring it from the recycle bin does not restore its connections; undoing the deletion restores both.
+- **Failures:** damaged, oversized, or externally modified files are refused when loading or overwriting, as appropriate. After an unexpected exit, recovery uses the last successful save or a valid backup; input that has not been submitted may be lost. Moving a card between workspaces involves two files, so an interruption may leave duplicates that need checking on both sides.
+
+To try the application with a separate data directory:
 
 ```powershell
-node scripts/build-desktop.cjs --package --out artifacts/release-0.5.9-final
+npm start -- --data-dir .local/demo
+# Or, from the portable application folder:
+.\DeskGhost.exe --data-dir D:\DeskGhostData
 ```
 
-`--out` 必须是 `artifacts` 内尚不存在的目录。应用包只包含 `desktop/`、`package.json` 和本说明，原始 AI 素材、演示文件、仓库临时文件和用户任务数据均不打入应用。字体许可随字体保留；Electron / Chromium 与自包含 .NET 运行时许可随对应运行时保留，.NET 说明从实际发布版本的本地包中复制，缺失时停止打包。
+If you use a custom directory, keep specifying the same `--data-dir` when upgrading.
 
-发布附件为 `DeskGhost-v0.5.9-win-x64.zip` 与 `SHA256SUMS.txt`，更新说明见 [v0.5.9 发布说明](docs/releases/v0.5.9.md)。解压整个目录后运行 `DeskGhost.exe`，不要只复制单个可执行文件。升级前正常退出旧版并备份工作区文件，将新版解压到独立文件夹；默认仍读取原来的本地设置和工作区，使用自定义 `--data-dir` 的用户需继续指定相同目录。工作区格式保持版本 2。当前便携版未进行代码签名，不包含安装器或自动更新。
+## License
 
-## 桌宠与直接操作
+The project's own program code uses the standard [MIT License](LICENSE), including the implementations of interactions and animations. The license text follows the version published by the [Open Source Initiative](https://opensource.org/license/mit).
 
-任务图位于略小于屏幕的暖色皮革板内，带有细纹、缝线和厚边。挂钩与拉环取自 `assets/SVG/hookandring_example.svg`，按原稿分层；金属直柄向上延长约 30%，钩头和挂环位置不变。打开时挂钩从屏幕上边缘滑入，整板先缓慢拉起，再加速、减速，让拉环超过挂钩后略微回落挂住；关闭时先上提脱钩，再向下收回，拉环离开后挂钩向上收回屏幕外。挂环下方的棕色连接片末端由上边栏遮住，露出的金环仍可点击。整个板子只平移，不缩放或改变透明度。点击拉环可收起，中途反向保持当前位置；关闭效果或启用减少动态效果时直接切换。
+**The original artwork is All Rights Reserved and is not covered by the MIT License.** This includes the artwork project files, SVGs, and example graphics in `assets/`, and the corresponding application assets in `desktop/web/assets/paper/` and `desktop/web/assets/stickers/`. The project files and outputs are still shared to show the working process; see [assets/README.md](assets/README.md). Code in the demos is covered by MIT, while the artwork in them remains covered by the artwork notice.
 
-快捷键或魔杖创建时只显示纸卡，皮革板保持收起。卡片出现时默认使用当前工作区，以及该工作区最近创建的未删除任务所用的分类；没有历史记录或最近任务未分类时保持 `Uncategorized`。默认值来自工作区数据，重启后仍可恢复。正面按 `Enter` 从标题进入正文，再按 `Enter` 创建；正文使用 `Shift+Enter` 换行，`Ctrl+Enter` 同样可前进。点击 `Done` 也会立即创建并保存任务，拉出皮革板，卡片自动缩回最新时间列的空闲行，不再需要拖放或二次确认。确认前按 `Esc` 可取消草稿。
+Third-party dependencies and fonts retain their own licenses and are not covered by the original-artwork notice. The bundled Bungee, Teko, Smiley Sans, and Orbitron fonts use the SIL Open Font License 1.1, with their licenses and [source records](desktop/web/assets/fonts/SOURCES.txt) retained. BankGothic and system Chinese fonts are not bundled.
 
-鼠标周围和漫游模式为键帽粒子提供目的地。粒子通过 Boids 分离、对齐、聚合与目标转向自行抵达，并保留惯性和个体差异。键帽采用奶油色、暖灰与深色配色，具有圆角、侧壁和字样；画圈时从屏幕外飞入。准备状态保持松散游动，鼠标移动时连续调整追踪权重和加速度，接近目标时制动。单击创建时，现有粒子从当前位置转向卡片轮廓与内部；快捷键创建则从屏外召集。抵达后逐粒淡入纸面，最多 2.4 秒收尾并停止渲染，标题立即可输入，翻面、确认和取消都不等待动画。进入皮革场景后键帽收起。驱散为粒子分配围绕中心、均匀分布的圆周出口，保留速度与分离避让，停止对齐、聚合和随机游走，避免快速甩动后又汇成同向的一束。
+## A little rambling
 
-| 操作 | 方式 |
-| --- | --- |
-| 直接创建任务 | `Ctrl+Alt+N`，跳过魔杖准备状态 |
-| 打开任务图 | `Ctrl+Alt+G`，或使用托盘入口 |
-| 魔杖启用 | 仅在桌宠待机时，无需按住鼠标，连续同方向画两圈，再单击开始输入。`Setting → Wand → Gesture difficulty` 可从 0（Easy）调至 100（Strict），默认 40；调整后点击 `Save settings` 生效。低、中档允许倾斜椭圆、两圈大小略有差异和局部抖动，Easy 还允许带折角的闭合双圈；滑条共同调整尺寸、形状、方向偏差、闭合程度和时间。100 保留原先严格条件：直径约为屏幕高度的 20%–34%，耗时 560–2200 ms。所有难度均要求近两圈同向运动；任务图打开期间不识别魔杖手势 |
-| 从准备状态创建 | 画圈后仅显示键帽鸟群，在当前显示器工作区任意位置单击一次进入卡片输入；没有光点或额外输入框 |
-| 下一栏 / 创建 | 正面 `Enter` 或 `Ctrl+Enter` 依次经过标题、正文、创建；不自动进入标签或备注。正文用 `Shift+Enter` 换行 |
-| 确认新卡片 | 点击 `Done`，或正文中按 `Enter`，保存后自动归位到最新列 |
-| 切换创建所属工作区 / 分类 | 点击 `Turn over` 或按 `Alt+F` 主动翻到背面后选择纸标签；`Alt+W` 打开工作区选择。切换工作区时预选该工作区最近使用的分类 |
-| 取消准备 / 创建 | 创建时按 `Esc`，未保存的纸卡从当前卡面释放粒子，围绕卡片中心向四周散开；取消立即释放输入，不等待动画，关闭效果时直接退出。准备时向任意方向快速移动鼠标可驱散，`Esc` 在未被其他程序占用时也可取消 |
-| 连接任务 | 点击卡片将其抬起，即显示悬空端口；从右端口拖向另一卡片，也可从左端口反向选择来源。目标在同列或左侧时，预览并自动右移目标及必要的后继任务 |
-| 改接连线 | 拖动已有连线的端点，放到另一张有效卡片上；缩小时，端口的透明点击扩边会让位于同侧已有端点，端口圆点本身仍用于新建连线 |
-| 断开连线 | 将已有连线端点拖到图中的空白处松开 |
-| 移动卡片 | 直接拖动；预览目标位置，松手后平滑吸附到逻辑列与空闲行 |
-| 新增时间列 | 将卡片拖入最右侧的“新时间列”区域，松手后同时建列并移入；也可点击该区域的按钮 |
-| 查看 / 编辑任务 | 双击卡片，或选中后按 `Enter` / `F2`；原位置留空，卡片放大到前景。点击 `Done` 返回原位的选中抬起姿态；已有卡片右上角仍可拖动。创建和详情都不显示六点提示 |
-| 翻到背面 / 返回正面 | 编辑卡片时点击 `Turn over` / `Front side`，或按 `Alt+F` |
-| 更换纸标签 | 点击工作区或分类标签，纸面抬起、阴影移动，展开带奶油纸背景的竖直候选列表；可键盘检索、选择和新建，关闭后标签落回。普通 Enter 选择后焦点回到标签，Ctrl+Enter 选择后继续正文输入 |
-| 移动到其他工作区 | 在已有卡片上选择目标工作区，确认断开全部连线后移动单卡；取消不会迁移 |
-| 改变任务进度 | 在当前状态贴纸上从右向左拖动，沿 TODO → IN PROGRESS → DONE 推进；从左向右拖动退回上一阶段 |
-| 停止任务 | 抓住状态贴纸向上或斜上方撕开；停止不影响后继任务，创建时也可这样选择初始状态 |
-| 汇合任务 | 将多个已有任务分别连接到同一张后续卡片；不再从卡片创建延续任务 |
-| 丢弃 / 恢复 | 将图中卡片或拿起的编辑卡片拖入垃圾桶；点击垃圾桶查看回收站并恢复，也可撤销删除 |
-| 归档 / 恢复链路 | 选中已完成或已停止的卡片，点击 `Archive chain` 归档所有相连卡片；整条链路必须都已完成或停止。`Restore chain` 恢复整条链路；只操作其中一张时需先断开连接 |
-| 浏览时间列 / 缩放 | 按住鼠标中键拖动画面，或用 `Shift` + 滚轮左右移动；`Ctrl` + 滚轮或 `+` / `-` 缩放，上限为原尺寸，下限为纵向容纳五张卡片（包含间隔）。任务图下方预留两行空白放置空间，普通滚轮和中键可直接向下浏览，无须先拖出新行；放入卡片后继续补出空白空间 |
-| 查找 / 撤销 / 重做 | `Ctrl+F`、`Ctrl+Z`、`Ctrl+Y` 或 `Ctrl+Shift+Z` |
+As mentioned above, the main purpose of this software is to experiment with AI's ability to extend artwork while maintaining consistency. The code is not the focus, and it has received almost no human review, so I don't particularly recommend using it directly.
 
-图中卡片与放大的编辑卡片共享 **621.3463 : 457.9779** 的原稿卡面比例；英文标题最大字号按原稿 **95 pt 相对于卡面宽度的比例**计算，含中文时上限为 **88 pt 的相同比例**，并非固定的浏览器 pt 字号。标题保持单行，输入或卡片大小变化时自动缩小以容纳完整文字，不提供标题滚轮或省略号；正文自动换行，长内容可在编辑区滚动。纸面与阴影为独立图层，阴影保留原稿 **#363636、87% 不透明度**；提起卡片时分别移动纸面与投影，保留纸张离开底面的距离感。
-
-双击任务后，原位置的卡片隐藏，前景卡片从该位置放大，背景任务图虚化；完成后卡片连续缩回选中的抬起姿态，纸面和阴影都与落点对齐。正面直接编辑标题与正文，背面保留不可更改的创建时间、ID 和独立备注，ID 自适应字号显示完整内容。没有详情侧栏、关闭叉、阶段文字或自动保存提示。任务状态只通过正面贴纸修改；横向撕贴纸前进或退回，向上撕贴纸进入 `Stopped`，背面不再提供状态选择器。
-
-工作区与分类采用八种明亮、色相区分清晰的纸标签，同一工作区或分类在各视图保持相同配色，文字为 **#363636**，长度随文字变化。正面左侧只露出固定宽度的颜色头，不显示标签文字；翻面后对应标签在右侧，保持相同高度和突出量。点击标签后抬起纸面，独立阴影向右下移动；候选以每页最多六张的竖直列表展开，带完整奶油纸背景、圆角与阴影，支持搜索、分页和键盘操作；悬停不再展开，`Alt+W` 仍可打开工作区选择。顶部工作区下拉菜单保留完整奶油纸背景、圆角和阴影，工作区名称加粗；顶部使用独立状态筛选按钮；`New task` 为绿色键帽按钮。
-
-背面的便签可附上并独立编辑，长备注在便签内部滚动，内容自动保存为 `notes`，不覆盖正面正文。空白便签可以取下；已有文字时保留便签，需先清空内容才可取下。正面的便签夹可带用户直接翻到备注。
-
-魔杖准备时点击前不接管键盘，任意位置单击后才进入标题输入；关闭动画后仍可画圈、单击创建。创建与编辑不等待视觉动画结束。
-
-驱散按速度判断：连续两个 25 Hz 采样间隔的移动速度均达到设定阈值即可触发，方向不限。设置中的 `Dismiss speed` 范围为 0.5–4 屏高/秒，默认 1.5；调低更容易驱散，点击 `Save settings` 后生效。召唤后的前 400 ms 为宽限期，避免画圈尾迹立即触发驱散；按住鼠标准备单击时暂停驱散。
-
-新卡片创建后可直接拖线接到已有任务之后。连接及其引起的移动、追加时间列及移入，均可一次撤销或重做。断开、改接、移动和删除也可撤销；会形成循环或超过上限的操作会被拒绝。图内拖动到边缘时可继续浏览时间列和下方空白行；空白范围按已有卡片及可视高度计算，单纯滚动不会无限扩展，也不会写入任务数据。分类视图仍按实际内容限制滚动。动画和过渡不承担保存或输入时序，关闭效果后仍可创建、编辑和使用快捷键。
-
-应用收起后，碎片停在屏幕外，不再占据右下角。默认在系统连续 3 分钟没有键盘或鼠标操作后，碎片慢慢从四边进入并漫游；恢复操作时退回屏幕外，不抢焦点或拦截桌面点击。设置中可改为 5 分钟、10 分钟或关闭漫游。全局快捷键、手势开关、效果等级和新工作区存储目录均可配置；正常退出使用界面或托盘中的退出操作。
-
-魔杖准备状态不自动请求键盘焦点，也不会因焦点确认失败而弹出任务卡片。单击后，应用才进入卡片输入流程；若标题尚未接收输入，可直接点击标题继续。[Windows 对后台应用取得前台焦点设有限制](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)，应用不会持续抢回焦点或修改系统焦点策略。
-
-## 工作区与任务规则
-
-- 同时最多打开 12 个工作区，每个独立保存任务、分类、逻辑时间列、布局、连线及归档历史。
-- 逻辑时间列表示工作阶段，不对应实际日期。未指定位置的独立任务默认放在最新、最右侧的逻辑时间列；显式指定位置时保留所选列。关系及左右约束只来自实际连线：连线目标必须在全部来源右侧；断线即解除对应约束，没有额外的 follow-up 绑定。允许独立任务、分支、汇合和插入时间列。
-- 状态为未开始、进行中、已完成、已停止，由用户撕下贴纸修改；创建时所选状态随确认一并保存。停止任务不影响后续任务，来源状态也不限制后续任务开始。
-- 可切换任务图与分类视图，按标题、分类、状态筛选。匹配结果以标题列表呈现，点击定位对应卡片。
-- 归档和恢复以实际连线组成的完整相连链路为单位，包含分支与汇合；归档前全部成员必须已完成或已停止，否则整次操作拒绝并提示先完成、停止或断线。一次归档 / 恢复可整体撤销，保留内容、连线及各卡片的历史。旧文件中部分归档的链路仍可打开，Graph / Archive 会显示相关的另一侧卡片及全部连线，并标记归档状态，避免隐藏的移动限制。新建或改接连线时，不能将归档卡片接到未归档卡片；需先恢复整条归档链。
-- 删除进入回收站，只移除该卡片及其连线，不级联删除或自动重连。撤销删除恢复原卡片与连线；从回收站恢复只恢复卡片。
-- 撤销 / 重做只保留在当前会话中，每个工作区最多 50 步、共 32 MiB。归档历史和回收站内容随文件保存。
-- 已有卡片更换工作区时先显示确认键帽对话框，明确说明会断开全部入线和出线；确认后只移动该卡片，其他任务与连线保留。任务 ID、创建时间、正文、备注、状态和归档历史保持不变，目标工作区自动加入所需分类，并放入最右列的空闲行。回收站卡片需先恢复，目标已存在同一任务 ID 或超限时拒绝迁移。
-- 迁移的撤销 / 重做同时作用于两个工作区，并恢复来源连线和原位置。两边必须同时打开且都已回到这次迁移的历史位置；某边有后续编辑时需先撤销它。关闭其中一边、裁剪旧历史或撤销后建立新分支，会阻止另一边单独跨越失效的配对边界。
-
-## 数据、安全与恢复
-
-默认工作区目录为 `%LOCALAPPDATA%\DeskGhost\Workspaces`，当前设置文件为同级的 `web-settings.json`。首次运行可读取旧版 `settings.json` 中的数据目录、打开文件和快捷键等设置，旧文件保持不变。`--data-dir` 改变配置目录与初始工作区目录；设置中更换数据文件夹只影响新建工作区，已打开的文件继续在原位置保存。
-
-每个工作区是一个 UTF-8 `*.deskghost.json` 文件，当前写入 **`formatVersion: 2`**，可直接复制用于导出、备份和迁移。复制前完成当前编辑并正常退出应用，确保待保存的修改已写入。主要字段为 `id`、`name`、`categories`、`columns`、`tasks` 和 `links`；任务新增独立字符串 `notes` 和可为空的时间字段 `createdAt`。状态字符串仍为 `NotStarted`、`InProgress`、`Completed`、`Stopped`，列与行从 0 开始。文件不引用脚本或外部资源。
-
-版本 1 文件在读取时仅在内存中升级，已有标题、名称、分类和历史不翻译或重写；新备注默认为空，旧任务的创建时间为 `null`，界面显示 `Not recorded`，不会伪造时间。第一次正常修改并保存时写入版本 2，原版文件的完整字节保留为 `.bak`。新版任务记录创建时的 UTC 时间，后续编辑、撤销、重做和归档都保留它。版本 2 文件需要使用支持该格式的版本打开，避免旧程序保存时丢失元数据。
-
-已有任务编辑自动提交；新卡片在点击 `Done` 或正文中按 `Enter` 确认时创建并保存，确认前保留为可取消的草稿。数据服务串行处理变更并等待保存结果。保存先写入同目录临时文件、刷新到磁盘，再原子替换主文件，并将上一份有效版本保留为 `.bak`。同目录 `.lock` 仅用于协调写入；迁移只需主文件，也可额外复制 `.bak`。文件系统不支持原子替换、权限不足或磁盘写入失败时，操作报告失败，不覆盖原有有效文件。
-
-外部程序修改、移动或删除已打开文件时，应用拒绝覆盖。保存失败会保留内存中的更改，可重试保存或使用 `Save as & continue` 保存到新文件。导出与另存拒绝覆盖已有目标文件及备份。尚有未保存数据时不会静默关闭工作区或正常退出。
-
-跨工作区迁移先校验两份完整候选数据，并确认当前更改已保存，然后先写入接收卡片的一侧，再写入移除卡片的一侧；撤销与重做遵守相同顺序。两份独立文件不构成文件系统级原子事务，异常中断可能保留两份卡片副本，原有有效快照也可能位于 `.bak`。正常第二步失败会尝试回滚已写入的一侧，原会话与历史保持不变；回滚也失败时明确显示错误，暂停两个相关工作区的编辑、原路径保存和正常关闭。此时分别 `Save as & continue` 到新文件可恢复正常操作；也可导出原内存快照留作救援备份，但导出本身不解除原路径保护，不能把错误当作迁移成功。
-
-损坏文件、未知版本、超限数据和无效图结构会被拒绝。使用 `Recover from backup` 选择主文件后，可从其 `.bak` 恢复；被替换的原文件会保留为独立 `.corrupt` 文件。版本 1 备份也可恢复，并保留未知的旧创建时间。异常退出后的恢复以最后一次成功保存或有效备份为准，尚未提交的输入可能丢失。
-
-数据服务异常停止后，任务编辑停止。界面可将主进程保留的最后一份有效工作区快照导出到新文件；全部未保存工作区完成救援导出后才允许正常退出。该快照不包括尚未被数据服务确认的输入。
-
-应用使用普通用户权限，无账户或云端同步，不修改无关系统配置。渲染器启用 sandbox、context isolation，禁用 Node 集成；仅通过白名单接口访问数据服务，阻止外部导航、远程资源与页面权限请求。后台手势通过采样鼠标位置实现，不安装全局键盘钩子。
-
-| 处理对象 | 上限 |
-| --- | --- |
-| 单个工作区文件 / 同时打开的数据预算 | 16 MiB / 16 MiB；会话为历史最大快照预留空间 |
-| 每工作区任务（包括归档、回收站） / 连线 | 2,000 / 8,000 |
-| 逻辑时间列 / 分类 | 256 / 256 |
-| 标题 / 内容 / 备注 / 分类名称 | 256 / 16,000 / 32,000 / 80 个 UTF-16 字符单位 |
-| 单任务归档历史 / 单次创建来源 | 200 / 256 |
-| 鼠标轨迹 | 25 Hz 采样、最多 104 点，按难度保留最多 2200–3800 ms |
-
-## 透明与效果边界
-
-透明宿主窗口覆盖当前显示器工作区，皮革任务场景本身是不透明的；场景外区域允许鼠标穿透。收起时立即释放场景输入区域，魔杖准备期间则接收一次桌面单击以进入创建流程；拖动图内对象期间暂时捕获输入。Alt+Tab 切到其他应用时取消任务界面的置顶，取消尚未松手的拖卡、连线、中键和撕贴纸操作，已松手提交的保存继续完成；点击或明确召回后恢复置顶，保留当前卡面、输入字段和草稿。内部保存、归位或迟到的焦点回调不会重新激活已隐藏的窗口。原生文件选择框打开期间不切换父窗口模式；取消后保留原视图。召集时选择鼠标所在显示器。系统安全桌面、独占全屏程序以及跨屏 DPI 行为需要在目标环境验证。
-
-当前场景采用 CSS / SVG 皮革、纸面和金属细节，卡片聚焦时只虚化应用内部的背景任务图，不模糊其他应用或桌面内容。减少动态效果或关闭效果后停止相应升降、翻面与景深过渡，功能仍然可用。
-
-视觉优先：默认高效果为 72 个碎片、最高 60 FPS，低效果为 42 个、最高 30 FPS；动画画布像素和计算步数均设上限。效果关闭、碎片已退到屏幕外或页面不可见时停止相应渲染；仅召集、退场和闲置漫游期间运行动画。关闭手势后不再识别轨迹；闲置判断最多每秒检查一次。上述数值是实现配置，不是资源占用承诺；尚未确定 CPU、内存和功耗指标。
-
-无法读取当前桌面的鼠标位置时，手势采样降为 1 秒、随后 5 秒间隔重试，并释放鼠标拦截；恢复访问后回到正常采样。系统休眠期间停止采样。
-
-## 验证与待验收
-
-```powershell
-dotnet build src/DeskGhost.Bridge/DeskGhost.Bridge.csproj --configuration Release
-dotnet run --project tests/DeskGhost.Checks/DeskGhost.Checks.csproj --configuration Release
-npm test
-npm run test:ui
-```
-
-`npm test` 运行集中维护的 Node 检查。`npm run test:ui` 在 Windows 上启动真实 Electron，使用 `.local/web-smoke` 下的独立数据目录验证交互与保存并生成截图。CI 依次运行 Core、Node、源码 Electron 检查，构建 Windows x64 便携版后，再通过 `DESKGHOST_EXE` 对成品运行相同的界面检查。成功后生成 ZIP 与 SHA-256 清单，重新读取清单核对压缩包后保留为 Actions 构建产物；失败时保留界面截图。工作流仅有仓库读取权限，不自动创建标签或发布 GitHub Release。
-
-图交互回归按实际可视区域缩放和平移测试目标，并在小图区域明确制造旧端点与端口扩边重叠的情况，分别检查改接、新建和取消后的数据完整性。卡片归位的纸面与阴影偏移按当前图缩放换算，避免只在特定屏幕尺寸下通过。
-
-集中回归覆盖正面 Enter 直接创建、单次确认归位、默认分类及工作区隔离、输入法与重复按键保护、主动翻面后编辑标签与备注、选中直接连线、拖入垃圾桶、五行缩放边界、中键平移与携带中滚动、标签和元数据自适应、迁移确认与取消、来源连线及配对撤销 / 重做。Core 检查保留历史失效边界、目标上限及安全保存验证，并覆盖整链归档 / 恢复、拒绝时的原子性、断线后独立归档和移动、旧混合归档兼容，以及阻止新建跨归档状态的连线。界面回归检查挂钩同步进退、五行缩放边界、归位时纸面与阴影连续，以及隐藏关联的显示。便携版使用同一套界面回归检查；可通过 `DESKGHOST_EXE` 指定待验收的可执行文件。本机结果不替代其他输入法、显示器和焦点环境的人工验收。
-
-魔杖回归会替换系统鼠标读数重放双圈和快速移动轨迹，经过实际定时采样、识别和输入流程，覆盖待机召唤、任务图中禁用魔杖、快速画圈、关闭动画及禁用手势。集中检查覆盖难度设置持久化、自然椭圆、适度抖动和各难度的速度及尺寸边界，宽松档接受严格档拒绝的慢圈、小圈和不规则椭圆，所有档位均拒绝单圈、折返、八字和乱甩；驱散轨迹覆盖屏幕中心与边缘的同速移动、速度阈值、连续采样及召唤宽限期。真实界面检查包含拖卡建列、快捷卡片连接、独立任务默认进入最右列、原子撤销，以及模拟系统闲置后漫游、恢复操作后完全退场。
-
-准备交互回归检查单击前不接管键盘、任意位置单击后打开统一卡片、首字与输入法组合输入，以及驱散速度设置的保存和生效。取消创建覆盖组装中、组装完成后和关闭效果，验证卡面粒子可见退场并最终清空；受控延迟启动应答验证 Esc 收起后不会重新弹出拉栏。Playwright 的页面输入会模拟焦点，不能证明 Windows 原生键盘路由成功；独立子检查会关闭该模拟，并在确认前台窗口、子控件焦点及进程均属于本次测试实例后才发送原生按键。首次呼出检查从不可聚焦的待机状态开始，在一个或多个测试窗口前只发送一次真实全局快捷键，分别验证创建和任务图的焦点、置顶、首字输入，以及不先点击界面即可用原生 Esc 收起。如果运行环境未把测试窗口作为输入目标，该子检查会明确跳过，不能计为原生输入验收通过。
-
-仍需人工验收：
-
-- 中文输入法首字、组合输入和分类检索；准备状态单击或快捷键呼出后立即输入。
-- 皮革板上提越钩、回落挂住及收回的速度曲线；新卡片确认后自动归位、已有卡片拿起与归位、垃圾桶丢弃。
-- 提起阴影、翻面景深、前后标签位置、竖直纸标签选择、便签附上 / 取下及滚动。
-- 离线字体与 BankGothic 本地 / Orbitron 回退、95 pt 原稿最大标题与自适应缩小、完整 ID、卡面比例与长文本、贴纸横向进度和上撕停止、效果降级。
-- 真实鼠标双圈 / 任意方向快速移动驱散的误触率、桌面点击穿透，以及不同显示器、缩放比例、负坐标和跨屏使用。
-- 全局快捷键冲突、托盘操作、与其他应用切换焦点及独占全屏场景。
-- 磁盘空间不足、断电、移动磁盘断开、损坏主文件 / 备份、迁移写入或回滚中断、数据服务异常停止后的救援流程。
-- 0 / 500 / 2,000 任务下的输入延迟、动画帧率、CPU、内存和功耗；据此调整最终默认效果。
-
-当前代码入口为 `desktop/main.cjs`、`desktop/web` 和 `src/DeskGhost.Bridge`；公共数据逻辑位于 `src/DeskGhost.Core`。测试集中在 `tests/DeskGhost.Checks` 与 `tests/desktop.test.cjs`。

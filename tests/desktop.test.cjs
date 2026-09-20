@@ -7,11 +7,11 @@ const root = path.resolve(__dirname, '..');
 
 test('portable package includes only runtime sources and release documentation', () => {
   const { ignorePackagePath } = require('../scripts/build-desktop.cjs');
-  for (const file of ['', '/desktop', '/desktop/main.cjs', '/desktop/web/assets/fonts/Bungee-Regular.ttf', '/package.json', '/README.md']) {
+  for (const file of ['', '/desktop', '/desktop/main.cjs', '/desktop/web/assets/fonts/Bungee-Regular.ttf', '/package.json', '/README.md', '/LICENSE', '/assets', '/assets/README.md']) {
     assert.equal(ignorePackagePath(file), false, file || 'package root');
     assert.equal(ignorePackagePath(file.replaceAll('/', '\\')), false, 'Windows path: ' + file);
   }
-  for (const file of ['/assets/card.ai', '/temp', '/temp/private.txt', '/.local/data', '/node_modules', '/desktop-other', '/README.md.bak', '/package-lock.json']) {
+  for (const file of ['/assets/card.ai', '/assets/SVG/card_example.svg', '/assets/README.md.bak', '/LICENSE.bak', '/temp', '/temp/private.txt', '/.local/data', '/node_modules', '/desktop-other', '/README.md.bak', '/package-lock.json']) {
     assert.equal(ignorePackagePath(file), true, file);
     assert.equal(ignorePackagePath(file.replaceAll('/', '\\')), true, 'Windows path: ' + file);
   }
